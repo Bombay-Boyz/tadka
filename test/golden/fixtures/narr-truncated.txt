@@ -1,0 +1,7 @@
+Error, code pkg::E1000: top-level problem.
+Location: example.hs, line 3, column 9.
+Source line 3: "let x = foo + 1".
+The problem is at columns 9 through 11, labeled: here.
+Help: see the related items
+Related: pkg::E1001 — first related problem.
+1 more related diagnostic was omitted at the depth limit.

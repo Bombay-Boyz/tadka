@@ -1,0 +1,169 @@
+cabal-version:      3.0
+name:               tadka
+version:            1.0.0.0
+synopsis:           Beautiful, structured, provably-correct diagnostic reports for Haskell.
+description:
+  A diagnostic reporting framework for Haskell inspired by
+  Rust's @miette@: structured error types, three pluggable report renderers
+  (graphical, narratable, JSON), error codes with documentation links,
+  related-error chains, labeled multi-span source snippets, and derive-macro
+  ergonomics.
+  
+  
+category:           Development, Error Handling
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             csn
+maintainer:         bombay.boyz@hotmail.com
+copyright:          (c) 2026 csn
+build-type:         Simple
+tested-with:        GHC ==9.10.1
+extra-doc-files:    CHANGELOG.md
+                    README.md
+
+-- Treat warnings as errors during development and CI, but not in released
+-- builds: new GHC versions add warnings that would otherwise break downstream
+-- installs (cabal check rejects an unconditional -Werror). Enabled via
+-- cabal.project for our own builds.
+flag werror
+  description: Treat warnings as errors (enable in dev/CI, off for releases).
+  default:     False
+  manual:      True
+
+-- Shared build settings. Warnings-as-errors are honoured under the `werror`
+-- flag (principles.docx: "Enable compiler warnings and treat them as errors").
+common warnings
+  default-language: GHC2021
+  ghc-options:      -Wall
+                    -Wcompat
+                    -Wredundant-constraints
+                    -Wincomplete-record-updates
+                    -Wincomplete-uni-patterns
+                    -Wpartial-fields
+  if flag(werror)
+    ghc-options:    -Werror
+
+-- The public library. Exposes exactly one supported module, @Tadka@; everything
+-- under @Tadka.Internal.*@ is exposed for the derive-macro/manual-instance
+-- shared-function discipline but carries NO compatibility guarantee.
+library
+  import:           warnings
+  hs-source-dirs:   src
+  exposed-modules:  Tadka
+                    -- Internal surface (no compatibility guarantee):
+                    Tadka.Internal
+                    Tadka.Internal.Types
+                    Tadka.Internal.Ann
+                    Tadka.Internal.Span
+                    Tadka.Internal.Width
+                    Tadka.Internal.Context
+                    Tadka.Internal.Diagnostic
+                    Tadka.Internal.Related
+                    Tadka.Internal.Config
+                    Tadka.Internal.Render
+                    Tadka.Internal.Terminal
+                    Tadka.Internal.Renderer.Graphical
+                    Tadka.Internal.Renderer.Narratable
+                    Tadka.Internal.Renderer.Json
+                    Tadka.Internal.TH
+                    Tadka.Internal.Generics
+                    Tadka.Internal.Interop
+  -- Generated, checked-in Unicode table (regenerate via tools/gen-width-table.hs):
+  other-modules:    Tadka.Internal.Width.Table
+  -- Phase 0/1 dependency pins (vision Infrastructure). `array` backs the width
+  -- table's binary-searched ranges; `network-uri` validates absolute URLs.
+  -- Bounds are added in a later hardening pass.
+  build-depends:    base                          >=4.20   && <4.21
+                  , text                          >=2.0    && <2.2
+                  , array                          >=0.5    && <0.6
+                  , bytestring                     >=0.11   && <0.13
+                  , containers                     >=0.6    && <0.8
+                  , network-uri                    >=2.6    && <2.7
+                  , prettyprinter                  >=1.7    && <1.8
+                  , prettyprinter-ansi-terminal    >=1.1    && <1.2
+                  , ansi-terminal                  >=1.0    && <1.2
+                  , template-haskell               >=2.20   && <2.23
+                  , aeson                          >=2.1    && <2.4
+
+-- Golden test suite: independently runnable (`cabal test golden`).
+test-suite golden
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test/golden
+  main-is:          Main.hs
+  other-modules:    Fixtures
+  build-depends:    base
+                  , tadka
+                  , text
+                  , aeson
+                  , prettyprinter
+                  , template-haskell
+
+-- Property (Hedgehog) test suite: independently runnable (`cabal test props`).
+test-suite props
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test/props
+  main-is:          Main.hs
+  other-modules:    Phase1
+                    Phase2
+                    Phase3
+                    Phase4
+                    Phase5
+                    Phase6
+                    Phase7
+                    Phase8
+                    Phase9
+                    Phase11
+                    Tabs
+                    TermColor
+                    Labels
+                    Cause
+                    GenDiag
+  build-depends:    base
+                  , tadka
+                  , text
+                  , aeson
+                  , prettyprinter
+                  , prettyprinter-ansi-terminal
+                  , template-haskell
+                  , hedgehog
+
+-- One-directional interop adapters. Each is a separate sub-library so the core
+-- library never depends on a parser package; core modules cannot import these.
+library interop-ghc
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   interop/ghc
+  exposed-modules:  Tadka.Interop.GHC
+  build-depends:    base, tadka, text, ghc >=9.10 && <9.11
+
+library interop-megaparsec
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   interop/megaparsec
+  exposed-modules:  Tadka.Interop.Megaparsec
+  build-depends:    base, tadka, text, megaparsec >=9.0 && <9.9
+
+library interop-attoparsec
+  import:           warnings
+  visibility:       public
+  hs-source-dirs:   interop/attoparsec
+  exposed-modules:  Tadka.Interop.Attoparsec
+  build-depends:    base, tadka, text, attoparsec >=0.14 && <0.15
+
+test-suite interop
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test/interop
+  main-is:          Main.hs
+  build-depends:    base
+                  , tadka
+                  , tadka:interop-ghc
+                  , tadka:interop-megaparsec
+                  , tadka:interop-attoparsec
+                  , text
+                  , containers
+                  , megaparsec >=9.0
+                  , attoparsec >=0.14
+                  , ghc

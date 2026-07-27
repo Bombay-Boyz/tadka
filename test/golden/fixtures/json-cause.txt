@@ -1,0 +1,14 @@
+{
+  "code": "tadka::E0100",
+  "severity": "error",
+  "message": "failed to compile `Main`",
+  "labels": [],
+  "help": null,
+  "url": null,
+  "related": [],
+  "causes": [
+    { "code": "tadka::E0042", "message": "type mismatch in `foo`" }
+  ],
+  "truncated": false,
+  "cycleOmitted": false
+}

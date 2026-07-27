@@ -1,0 +1,2 @@
+Error, code tadka::E0100: failed to compile `Main`.
+Caused by: tadka::E0042 — type mismatch in `foo`.

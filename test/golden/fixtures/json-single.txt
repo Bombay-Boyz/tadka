@@ -1,0 +1,14 @@
+{
+  "code": "tadka::E0001",
+  "severity": "error",
+  "message": "undefined variable `foo`",
+  "labels": [
+    { "line": 3, "column": 9, "length": 3, "text": "not in scope", "primary": true, "stale": false }
+  ],
+  "help": "did you mean `bar`?",
+  "url": "https://example.org/errors/E0001",
+  "related": [],
+  "causes": [],
+  "truncated": false,
+  "cycleOmitted": false
+}

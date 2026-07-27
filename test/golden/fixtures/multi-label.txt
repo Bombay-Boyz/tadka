@@ -1,0 +1,15 @@
+error[tadka::E0042]: type mismatch
+  ┌─ example.hs:3:17
+  │
+1 │ addOne :: Int -> Int
+  │           --- expected because of this
+2 │ addOne x = x
+3 │ result = addOne "hi"
+  │                 ^^^^ found `String`, expected `Int`
+  │
+  = help: convert with `show` or change the annotation
+  = related: tadka::E0043 — conflicting instance defined here
+    ┌─ Prelude.hs:1:1
+    │
+  1 │ instance Num String where ...
+    │ ^^^^^^^^ conflicting instance

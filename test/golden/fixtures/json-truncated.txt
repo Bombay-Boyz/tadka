@@ -1,0 +1,16 @@
+{
+  "code": "pkg::E1000",
+  "severity": "error",
+  "message": "top-level problem",
+  "labels": [
+    { "line": 3, "column": 9, "length": 3, "text": "here", "primary": true, "stale": false }
+  ],
+  "help": "see the related items",
+  "url": null,
+  "related": [
+    { "code": "pkg::E1001", "severity": "error", "message": "first related problem", "labels": [], "help": null, "url": null, "related": [], "causes": [], "truncated": true, "cycleOmitted": false }
+  ],
+  "causes": [],
+  "truncated": false,
+  "cycleOmitted": false
+}

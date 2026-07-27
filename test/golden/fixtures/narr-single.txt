@@ -1,0 +1,6 @@
+Error, code tadka::E0001: undefined variable `foo`.
+Location: example.hs, line 3, column 9.
+Source line 3: "let x = foo + 1".
+The problem is at columns 9 through 11, labeled: not in scope.
+Help: did you mean `bar`?
+More information: https://example.org/errors/E0001

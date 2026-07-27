@@ -1,0 +1,15 @@
+-- Reproducible builds (principles.docx: "Write deterministic, reproducible
+-- builds"). The index-state pins the Hackage snapshot; bump deliberately.
+packages: .
+
+index-state: 2026-07-26T06:08:19Z
+
+-- Always resolve with test suites in the plan so dependency choices are stable
+-- whether or not a given invocation runs them.
+tests: True
+
+-- Warnings-as-errors for our own builds (the released package leaves it off by
+-- default so new GHC warnings can't break downstream installs; see the
+-- `werror` flag in tadka.cabal).
+package tadka
+  flags: +werror

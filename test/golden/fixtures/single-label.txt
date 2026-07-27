@@ -1,0 +1,8 @@
+error[tadka::E0001]: undefined variable `foo`
+  ┌─ example.hs:3:9
+  │
+3 │ let x = foo + 1
+  │         ^^^ not in scope
+  │
+  = help: did you mean `bar`?
+  = see: https://example.org/errors/E0001
