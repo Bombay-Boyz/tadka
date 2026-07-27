@@ -1,0 +1,7 @@
+instance Tadka.Internal.Diagnostic.Diagnostic Fixtures.ParseError
+    where {Tadka.Internal.Diagnostic.message = Prettyprinter.Internal.pretty GHC.Internal.Base.. GHC.Internal.Show.show;
+           Tadka.Internal.Diagnostic.code _ = GHC.Internal.Maybe.Just (Tadka.Internal.Types.unsafeDiagnosticCode (Data.Text.Internal.pack "tadka::E0001"));
+           Tadka.Internal.Diagnostic.severity _ = Tadka.Internal.Types.SevError;
+           Tadka.Internal.Diagnostic.help _ = GHC.Internal.Maybe.Just (Prettyprinter.Internal.pretty (Data.Text.Internal.pack "did you forget a semicolon?"));
+           Tadka.Internal.Diagnostic.context e_0 = Tadka.Internal.Context.buildContext (Fixtures.errSource e_0) [(Fixtures.at e_0,
+                                                                                                                  GHC.Internal.Maybe.Just (Prettyprinter.Internal.pretty (Data.Text.Internal.pack "unexpected token here")))]}

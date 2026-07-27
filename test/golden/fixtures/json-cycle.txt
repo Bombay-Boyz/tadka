@@ -1,0 +1,14 @@
+{
+  "code": "tadka::E0043",
+  "severity": "error",
+  "message": "conflicting instance defined here",
+  "labels": [
+    { "line": 1, "column": 1, "length": 8, "text": "conflicting instance", "primary": true, "stale": false }
+  ],
+  "help": null,
+  "url": null,
+  "related": [],
+  "causes": [],
+  "truncated": false,
+  "cycleOmitted": true
+}

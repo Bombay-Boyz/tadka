@@ -1,0 +1,5 @@
+error[tadka::E0001]: undefined variable `foo`
+  ┌─ tab.hs:2:11
+  │
+2 │       return foo
+  │              ^^^ not in scope

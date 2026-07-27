@@ -1,0 +1,7 @@
+dist-newstyle/
+*.hi
+*.o
+.ghc.environment.*
+cabal.project.local
+cabal.project.local~
+tools/.ucd-cache/

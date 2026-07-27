@@ -1,0 +1,3 @@
+error[tadka::E0100]: failed to compile `Main`
+  = caused by: tadka::E0042 — type mismatch in `foo`
+  = caused by: unbound variable `x`

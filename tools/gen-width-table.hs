@@ -1,0 +1,184 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+-- | Regenerates @src/Tadka/Internal/Width/Table.hs@ from a pinned snapshot of
+-- the Unicode Character Database (East-Asian-width, general categories for
+-- zero-width marks, and grapheme-cluster-break properties).
+--
+-- This is developer tooling, not part of the published package. It uses only
+-- GHC boot libraries so it runs under @runghc tools/gen-width-table.hs@ with no
+-- cabal environment. Missing UCD source files are fetched with @curl@ into
+-- @tools/.ucd-cache/@ (gitignored); the checked-in artifact is @Table.hs@.
+--
+-- The UCD version is pinned in 'ucdVersion' and echoed into the generated
+-- file's header, per the Phase 1 risk note (UCD version drift).
+module Main (main) where
+
+import           Control.Monad     (unless)
+import           GHC.IO.Encoding   (setLocaleEncoding, utf8)
+import           Data.List         (sort)
+import           Data.Text         (Text)
+import qualified Data.Text         as T
+import qualified Data.Text.IO      as TIO
+import           Numeric           (readHex)
+import           System.Directory  (createDirectoryIfMissing, doesFileExist)
+import           System.FilePath   ((</>))
+import           System.Process    (callProcess)
+
+-- | Pinned Unicode Character Database version. Bump deliberately and rerun.
+ucdVersion :: String
+ucdVersion = "15.1.0"
+
+ucdBaseUrl :: String
+ucdBaseUrl = "https://www.unicode.org/Public/" <> ucdVersion <> "/ucd"
+
+cacheDir :: FilePath
+cacheDir = "tools" </> ".ucd-cache"
+
+outFile :: FilePath
+outFile = "src" </> "Tadka" </> "Internal" </> "Width" </> "Table.hs"
+
+-- | (relative-url-path, cached-basename) for each source file we consume.
+sources :: [(String, FilePath)]
+sources =
+  [ ("EastAsianWidth.txt",                     "EastAsianWidth.txt")
+  , ("extracted/DerivedGeneralCategory.txt",   "DerivedGeneralCategory.txt")
+  , ("auxiliary/GraphemeBreakProperty.txt",    "GraphemeBreakProperty.txt")
+  , ("emoji/emoji-data.txt",                   "emoji-data.txt")
+  ]
+
+main :: IO ()
+main = do
+  setLocaleEncoding utf8  -- UCD files are UTF-8; ambient locale may be POSIX
+  putStrLn ("tadka width-table generator - UCD " <> ucdVersion)
+  createDirectoryIfMissing True cacheDir
+  mapM_ ensureCached sources
+
+  eaw <- readUcd "EastAsianWidth.txt"
+  gc  <- readUcd "DerivedGeneralCategory.txt"
+  gbp <- readUcd "GraphemeBreakProperty.txt"
+  emo <- readUcd "emoji-data.txt"
+
+  let wide      = coalesce [ r | (r, p) <- eaw, p == "W" || p == "F" ]
+      zeroWidth = coalesce [ r | (r, p) <- gc,  p `elem` ["Mn", "Me", "Cf"] ]
+      gbFor nm  = coalesce [ r | (r, p) <- gbp, p == nm ]
+      extPict   = coalesce [ r | (r, p) <- emo, p == "Extended_Pictographic" ]
+
+  writeFile outFile (renderModule wide zeroWidth gbFor extPict)
+  putStrLn ("wrote " <> outFile
+            <> " (wide=" <> show (length wide)
+            <> ", zero=" <> show (length zeroWidth) <> " ranges)")
+
+-- | Download a source file into the cache if it is not already present.
+ensureCached :: (String, FilePath) -> IO ()
+ensureCached (urlPath, name) = do
+  let dest = cacheDir </> name
+  present <- doesFileExist dest
+  unless present $ do
+    putStrLn ("fetching " <> urlPath)
+    callProcess "curl" ["-sSL", "--max-time", "60", "-o", dest, ucdBaseUrl <> "/" <> urlPath]
+
+readUcd :: FilePath -> IO [((Int, Int), Text)]
+readUcd name = do
+  contents <- TIO.readFile (cacheDir </> name)
+  pure (concatMap parseLine (T.lines contents))
+
+-- | Parse one UCD data line into a code-point range and its property value.
+-- Comments (@#@ onward) and blank lines yield no result.
+parseLine :: Text -> [((Int, Int), Text)]
+parseLine raw =
+  case T.strip (T.takeWhile (/= '#') raw) of
+    body | T.null body -> []
+         | otherwise ->
+             case map T.strip (T.splitOn ";" body) of
+               (codes : prop : _) -> [(parseCodes codes, prop)]
+               _                  -> []
+
+parseCodes :: Text -> (Int, Int)
+parseCodes t =
+  case map hex (T.splitOn ".." t) of
+    [x]    -> (x, x)
+    [a, b] -> (a, b)
+    _      -> error ("gen-width-table: malformed code range: " <> T.unpack t)
+
+hex :: Text -> Int
+hex t = case readHex (T.unpack t) of
+  [(n, "")] -> n
+  _         -> error ("gen-width-table: bad hex: " <> T.unpack t)
+
+-- | Sort and merge adjacent/overlapping ranges into a minimal ascending list.
+coalesce :: [(Int, Int)] -> [(Int, Int)]
+coalesce = go . sort
+  where
+    go []  = []
+    go [r] = [r]
+    go ((a, b) : (c, d) : rest)
+      | c <= b + 1 = go ((a, max b d) : rest)
+      | otherwise  = (a, b) : go ((c, d) : rest)
+
+-- | Emit the generated module. Grapheme-break properties are written as one
+-- list per property so the generated file has no dependency on the @GBProp@
+-- type (which lives in the hand-written 'Tadka.Internal.Width').
+renderModule
+  :: [(Int, Int)]
+  -> [(Int, Int)]
+  -> (Text -> [(Int, Int)])
+  -> [(Int, Int)]
+  -> String
+renderModule wide zeroWidth gbFor extPict = unlines $
+  [ "-- | GENERATED by tools/gen-width-table.hs - DO NOT EDIT BY HAND."
+  , "-- Unicode Character Database version: " <> ucdVersion <> "."
+  , "-- Regenerate with: runghc tools/gen-width-table.hs"
+  , "--"
+  , "-- No compatibility guarantee (internal). Each list is ascending and"
+  , "-- coalesced; entries are inclusive @(lo, hi)@ code-point ranges."
+  , "module Tadka.Internal.Width.Table"
+  , "  ( ucdVersion"
+  , "  , wideRanges"
+  , "  , zeroWidthRanges"
+  , "  , gbCR, gbLF, gbControl, gbExtend, gbZWJ, gbRegionalIndicator"
+  , "  , gbPrepend, gbSpacingMark, gbL, gbV, gbT, gbLV, gbLVT"
+  , "  , gbExtendedPictographic"
+  , "  ) where"
+  , ""
+  , "-- | The UCD version this table was generated from."
+  , "ucdVersion :: String"
+  , "ucdVersion = " <> show ucdVersion
+  , ""
+  ] ++ renderList "wideRanges" wide
+    ++ renderList "zeroWidthRanges" zeroWidth
+    ++ renderList "gbCR"                 (gbFor "CR")
+    ++ renderList "gbLF"                 (gbFor "LF")
+    ++ renderList "gbControl"            (gbFor "Control")
+    ++ renderList "gbExtend"             (gbFor "Extend")
+    ++ renderList "gbZWJ"                (gbFor "ZWJ")
+    ++ renderList "gbRegionalIndicator"  (gbFor "Regional_Indicator")
+    ++ renderList "gbPrepend"            (gbFor "Prepend")
+    ++ renderList "gbSpacingMark"        (gbFor "SpacingMark")
+    ++ renderList "gbL"                  (gbFor "L")
+    ++ renderList "gbV"                  (gbFor "V")
+    ++ renderList "gbT"                  (gbFor "T")
+    ++ renderList "gbLV"                 (gbFor "LV")
+    ++ renderList "gbLVT"                (gbFor "LVT")
+    ++ renderList "gbExtendedPictographic" extPict
+
+renderList :: String -> [(Int, Int)] -> [String]
+renderList name ranges =
+  [ name <> " :: [(Int, Int)]"
+  , name <> " ="
+  ] ++ body ++ [""]
+  where
+    body = case ranges of
+      [] -> ["  []"]
+      _  -> zipWith prefix ("  [ " : repeat "  , ") ranges ++ ["  ]"]
+    prefix p (lo, hi) = p <> "(0x" <> showHexU lo <> ", 0x" <> showHexU hi <> ")"
+
+showHexU :: Int -> String
+showHexU n =
+  let s = showHexRaw n
+  in replicate (max 0 (4 - length s)) '0' ++ s
+  where
+    showHexRaw x = if x == 0 then "0" else go x ""
+    go 0 acc = acc
+    go x acc = go (x `div` 16) (digit (x `mod` 16) : acc)
+    digit d | d < 10    = toEnum (fromEnum '0' + d)
+            | otherwise = toEnum (fromEnum 'A' + d - 10)

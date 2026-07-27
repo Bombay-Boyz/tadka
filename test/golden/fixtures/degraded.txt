@@ -1,0 +1,6 @@
+error[tadka::E0001]: undefined variable `foo`
+  ┌─ example.hs
+  │
+  │ (span unavailable — source no longer matches at this position)
+  │
+  = help: did you mean `bar`?
