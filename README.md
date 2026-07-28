@@ -2,13 +2,11 @@
 
 > **Point at the problem. Say it clearly. Make it beautiful.**
 
-A diagnostic reporting framework for Haskell, inspired from
+A diagnostic reporting framework for Haskell, targeting full feature parity with
 Rust's [`miette`](https://github.com/zkat/miette): structured error types, three
 pluggable renderers (graphical / narratable / JSON), error codes with doc links,
 related-error chains, labeled multi-span source snippets, and derive-macro
 ergonomics.
-
-"Tadka" in hindi means tempering. Adds colour, flavour and appeal to food. Hope fully this will add some colour and appeal to resolving haskell errors when developers see it
 
 Design: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`.
 

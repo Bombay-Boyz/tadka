@@ -17,6 +17,7 @@ module Tadka.Internal.Renderer.Narratable
 
 import qualified Data.List.NonEmpty                    as NE
 import           Data.Text                             (Text)
+import           Data.Char                             (isControl)
 import qualified Data.Text                             as T
 import           Numeric.Natural                       (Natural)
 import           Prettyprinter                         (Doc, LayoutOptions (..),
@@ -27,6 +28,7 @@ import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated,
 import           Tadka.Internal.Ann                    (Ann (..))
 import           Tadka.Internal.Context                (Context (..), LabelKind (..),
                                                         LabelState (..), Labeled (..))
+import           Tadka.Internal.SourceCode             (SourceCode (..))
 import           Tadka.Internal.Diagnostic             (Diagnostic (..), SomeDiagnostic (..))
 import           Tadka.Internal.Related                (RelatedTree (..),
                                                         TerminationReason (..), walkCauses,
@@ -35,8 +37,7 @@ import           Tadka.Internal.Span                   (LineCol (..),
                                                         StaleReason (..), resolvedStart,
                                                         spanLength)
 import           Tadka.Internal.Types                  (Severity, SeverityLabels (..),
-                                                        severityLabels, sourceName,
-                                                        sourceText, unDiagnosticCode,
+                                                        severityLabels, unDiagnosticCode,
                                                         unLength, unUrl)
 
 -- | Resolved settings for the narratable handler (populated only by
@@ -58,8 +59,9 @@ toProseMarker AnnKeyword  = ""
 -- its 'toProseMarker'.
 docToProse :: Doc Ann -> Text
 docToProse =
-    renderSimplyDecorated id wrap . treeForm . layoutPretty (LayoutOptions Unbounded)
+    T.map flat . renderSimplyDecorated id wrap . treeForm . layoutPretty (LayoutOptions Unbounded)
   where wrap ann inner = toProseMarker ann <> inner <> toProseMarker ann
+        flat c = if isControl c then ' ' else c   -- one line per sentence; strip control chars
 
 renderNarratable :: Diagnostic e => NarratableOptions -> e -> Text
 renderNarratable opts e = T.intercalate "\n" (renderProse opts (SomeDiagnostic e))
@@ -87,21 +89,20 @@ contextSentences NoContext = []
 contextSentences (HasLabels src labels) = locationSentence ++ labelReadouts
   where
     indexed = NE.toList labels
-    srcls   = T.splitOn "\n" (sourceText src)
     oks     = [ (k, rs) | Labeled (LabelOk rs) k _ <- indexed ]
 
     locRs = case [ rs | (Primary, rs) <- oks ] of
       (rs:_) -> Just rs
       []     -> case oks of ((_, rs):_) -> Just rs; _ -> Nothing
     locationSentence = case locRs of
-      Just rs -> [ "Location: " <> sourceName src
+      Just rs -> [ "Location: " <> scName src
                      <> ", line "   <> tshow (lcLine (resolvedStart rs))
                      <> ", column " <> tshow (lcColumn (resolvedStart rs)) <> "." ]
-      Nothing -> [ "Location: " <> sourceName src <> "." ]
+      Nothing -> [ "Location: " <> scName src <> "." ]
 
     labelReadouts = concatMap readout indexed
     readout (Labeled (LabelOk rs) k txt) =
-      [ "Source line " <> tshow n <> ": \"" <> lineAt srcls n <> "\"."
+      [ "Source line " <> tshow n <> ": \"" <> lineTextAt src n <> "\"."
       , leadIn k <> colClause <> labeled ]
       where
         n       = lcLine (resolvedStart rs)
@@ -169,10 +170,11 @@ numRelated (SomeDiagnostic e) = length (related e)
 
 -- === Helpers ==============================================================
 
-lineAt :: [Text] -> Int -> Text
-lineAt ls n
-  | n >= 1 && n <= length ls = ls !! (n - 1)
-  | otherwise                = ""
+-- | Text of source line @n@ (1-based), fetched as a one-line window. Total.
+lineTextAt :: SourceCode a => a -> Int -> Text
+lineTextAt src n = case scLines src (n, n) of
+  ((_, t) : _) -> T.map (\c -> if isControl c then ' ' else c) t
+  []           -> ""
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

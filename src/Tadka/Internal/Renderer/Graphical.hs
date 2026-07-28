@@ -23,6 +23,7 @@ module Tadka.Internal.Renderer.Graphical
   , caretGlyph
   ) where
 
+import           Data.Char                     (isControl)
 import           Data.List.NonEmpty            (NonEmpty)
 import qualified Data.List.NonEmpty            as NE
 import           Data.Text                     (Text)
@@ -39,6 +40,10 @@ import           Tadka.Internal.Ann            (Ann)
 import           Tadka.Internal.Config         (ColorMode (..), UnicodeMode (..))
 import           Tadka.Internal.Context        (Context (..), LabelKind (..),
                                                 LabelState (..), Labeled (..))
+import           Tadka.Internal.SourceCode     (SourceCode (..))
+import           Tadka.Internal.Renderer.LinePlan (PlanEntry (..), planLines)
+import           Tadka.Internal.Renderer.Layout   (CellKind (..), assignLanes,
+                                                   cellAt, laneCount)
 import           Tadka.Internal.Diagnostic     (Diagnostic (..), SomeDiagnostic (..))
 import           Tadka.Internal.Related        (RelatedTree (..), TerminationReason (..),
                                                 walkCauses, walkRelated)
@@ -46,7 +51,7 @@ import           Tadka.Internal.Span           (LineCol (..), ResolvedSpan, reso
                                                 resolvedStart, spanLength)
 import           Tadka.Internal.Types          (DiagnosticCode,
                                                 Severity (..), SeverityLabels (..),
-                                                severityLabels, sourceName, sourceText,
+                                                severityLabels,
                                                 unDiagnosticCode, unLength, unUrl)
 import           Tadka.Internal.Width          (displayColumnAt, expandTabs)
 
@@ -58,6 +63,7 @@ data GraphicalOptions = GraphicalOptions
   , goPalette      :: NonEmpty AnsiStyle
   , goRelatedDepth :: Natural
   , goTabWidth     :: Int
+  , goContextLines :: Maybe Int
   }
   deriving (Eq, Show)
 
@@ -67,11 +73,15 @@ data Glyphs = Glyphs
   , gCorner :: Text   -- ^ top-left corner of the location line
   , gDash   :: Text   -- ^ horizontal dash following the corner
   , gEmDash :: Text   -- ^ em-dash used in prose separators
+  , gVellip :: Text   -- ^ vertical ellipsis marking elided lines
+  , gMLopen  :: Char  -- ^ multi-line span opening corner
+  , gMLthru  :: Char  -- ^ multi-line span continuation
+  , gMLclose :: Char  -- ^ multi-line span closing corner
   }
 
 glyphsFor :: UnicodeMode -> Glyphs
-glyphsFor UnicodeAscii = Glyphs "|" "+" "-" "-"
-glyphsFor _            = Glyphs "\x2502" "\x250C" "\x2500" "\x2014"  -- │ ┌ ─ —
+glyphsFor UnicodeAscii = Glyphs "|" "+" "-" "-" "..." '/' '|' '\\'
+glyphsFor _            = Glyphs "\x2502" "\x250C" "\x2500" "\x2014" "\x22EE" '\x256D' '\x2502' '\x2570'  -- │ ┌ ─ — ⋮ ╭ │ ╰
 
 -- | Wrap text in the ANSI escapes for a style, unless colour is off. Uses the
 -- terminal renderer so the escapes are correct; under 'ColorNever' the text is
@@ -103,8 +113,10 @@ labelDisplayStyle _   palette Secondary i = labelStyle palette i
 -- | The palette entry for label index @i@ (vision §7): entry @i `mod` p@ where
 -- @p@ is the palette length. The single place this cycling formula lives.
 labelStyle :: NonEmpty AnsiStyle -> Int -> AnsiStyle
-labelStyle palette i = xs !! (i `mod` length xs)
-  where xs = NE.toList palette
+labelStyle palette i =
+  case drop (i `mod` NE.length palette) (NE.toList palette) of
+    (s : _) -> s
+    []      -> NE.head palette   -- unreachable: 0 <= i `mod` n < n (NE.head is total)
 
 -- | Given a source line, a 1-based start column, and a character length,
 -- compute @(displayColumnsBefore, caretWidth)@ using display widths. Both are
@@ -137,7 +149,7 @@ renderRoot opts sd@(SomeDiagnostic e) =
     gw       = gutterWidth (context e)
     eqIndent = T.replicate (gw + 1) " "
     header   = headerLine (goColorMode opts) (severity e) (code e) (docToText (message e))
-    snip     = snippetLines glyphs (severity e) (goColorMode opts) (goPalette opts) (goTabWidth opts) gw (context e)
+    snip     = snippetLines glyphs (severity e) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
     trailer  = helpSeeLines gw (fmap docToText (help e)) (fmap unUrl (url e))
                  ++ causeLines
                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
@@ -159,52 +171,84 @@ headerLine cmode sev mcode msg =
 -- Width of the line-number gutter: enough for the largest displayed line
 -- number, or 1 when there are no resolved labels.
 gutterWidth :: Context -> Int
-gutterWidth ctx = case okEndLines ctx of
-  [] -> 1
-  ls -> length (show (maximum ls))
+gutterWidth ctx = length (show (foldr max 1 (okEndLines ctx)))
   where
     okEndLines NoContext          = []
     okEndLines (HasLabels _ lbls) =
       [ lcLine (resolvedEnd rs) | Labeled (LabelOk rs) _ _ <- NE.toList lbls ]
 
-snippetLines :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Int -> Context -> [Text]
-snippetLines _ _ _ _ _ _ NoContext = []
-snippetLines glyphs sev cmode palette tabW gw (HasLabels src labels) =
+snippetLines :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int -> Context -> [Text]
+snippetLines _ _ _ _ _ _ _ NoContext = []
+snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
   [locationLine, railBlank] ++ body
   where
     indexed = zip [0 ..] (NE.toList labels)
     oks   = [ (i, rs, k, docText txt) | (i, Labeled (LabelOk rs)   k txt) <- indexed ]
     stale = [ ()                      |     Labeled (LabelStale _) _ _   <- map snd indexed ]
-    srcls = T.splitOn "\n" (sourceText src)
 
     railIndent = T.replicate (gw + 1) " "
     railBlank  = railIndent <> gRail glyphs
     locationLine = railIndent <> gCorner glyphs <> gDash glyphs <> " " <> locText
-    locText = maybe (sourceName src) posText locRs
-    posText rs = sourceName src
+    locText = maybe (scName src) posText locRs
+    posText rs = scName src
                    <> ":" <> tshow (lcLine (resolvedStart rs))
                    <> ":" <> tshow (lcColumn (resolvedStart rs))
     locRs = case [ rs | (_, rs, Primary, _) <- oks ] of
       (rs:_) -> Just rs
       []     -> case oks of ((_, rs, _, _):_) -> Just rs; _ -> Nothing
 
+    -- Multi-line spans get connector lanes; single-line labels get carets.
+    startLineOf rs = lcLine (resolvedStart rs)
+    endLineOf   rs = lcLine (resolvedEnd rs)
+    isMulti     rs = startLineOf rs < endLineOf rs
+    multis = [ (startLineOf rs, endLineOf rs, k, txt) | (_, rs, k, txt) <- oks, isMulti rs ]
+    laneAssign = assignLanes [ (s, e) | (s, e, _, _) <- multis ]
+    nLanes = laneCount laneAssign
+    laneInfo = zipWith (\(lane, iv) (_, _, k, txt) -> (lane, iv, k, txt)) laneAssign multis
+    gsep = if nLanes > 0 then T.singleton ' ' else T.empty
+    laneIvAt lane l = case [ iv | (lane', iv@(s, e), _, _) <- laneInfo
+                                , lane' == lane, s <= l, l <= e ] of
+      (iv : _) -> Just iv
+      []       -> Nothing
+    glyphOfCell Open    = gMLopen glyphs
+    glyphOfCell Through = gMLthru glyphs
+    glyphOfCell Close   = gMLclose glyphs
+    glyphOfCell Blank   = ' '
+    srcGutter l = if nLanes == 0 then T.empty
+                  else T.pack [ maybe ' ' (\iv -> glyphOfCell (cellAt iv l)) (laneIvAt lane l)
+                              | lane <- [0 .. nLanes - 1] ] <> gsep
+    contBelow lane l = case laneIvAt lane l of
+      Just (s, e) -> s <= l && l < e
+      Nothing     -> False
+    caretGutter l = if nLanes == 0 then T.empty
+                    else T.pack [ if contBelow lane l then gMLthru glyphs else ' '
+                                | lane <- [0 .. nLanes - 1] ] <> gsep
+    mlSuffix l = T.concat
+      [ "  " <> colorize cmode (labelDisplayStyle sev palette k lane) t
+      | (lane, (_, e), k, mt) <- laneInfo, e == l, Just t <- [mt] ]
+
     body = okBlock ++ staleBlock
-    okBlock = case oks of
-      [] -> []
-      _  -> concatMap lineWithCarets [minL .. maxL]
+    okBlock = case ([ startLineOf rs | (_, rs, _, _) <- oks ]
+                    ++ [ endLineOf rs | (_, rs, _, _) <- oks, isMulti rs ]) of
+      []       -> []
+      (s : ss) -> concatMap (renderEntry win) plan
+        where plan   = planLines ctxLines (scLineCount src) (s : ss)
+              showns = [ l | ShowLine l <- plan ]
+              win    = case showns of
+                         (w : ws) -> scLines src (foldr min w ws, foldr max w ws)
+                         []       -> []
+    renderEntry _   (ElideLines _) = [railIndent <> gVellip glyphs]
+    renderEntry win (ShowLine l)   = lineWithCarets win l
+    lineWithCarets win l = numbered : caretsHere
       where
-        startLines = [ lcLine (resolvedStart rs) | (_, rs, _, _) <- oks ]
-        minL = minimum startLines
-        maxL = maximum startLines
-    lineWithCarets l = numbered : caretsHere
-      where
-        srcLine  = lineAt srcls l
-        numbered = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " " <> expandTabs tabW srcLine
+        srcLine  = sanitizeLine (lineLookup win l)
+        numbered = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " "
+                     <> srcGutter l <> expandTabs tabW srcLine <> mlSuffix l
         caretsHere =
-          [ caretLine i rs k txt srcLine
-          | (i, rs, k, txt) <- oks, lcLine (resolvedStart rs) == l ]
-    caretLine i rs k txt srcLine =
-      railIndent <> gRail glyphs <> " "
+          [ caretLine l i rs k txt srcLine
+          | (i, rs, k, txt) <- oks, not (isMulti rs), startLineOf rs == l ]
+    caretLine l i rs k txt srcLine =
+      railIndent <> gRail glyphs <> " " <> caretGutter l
         <> T.replicate dispStart " "
         <> colorize cmode (labelDisplayStyle sev palette k i)
              (T.replicate cw (T.singleton (caretGlyph k)) <> maybe "" (" " <>) txt)
@@ -253,7 +297,7 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
     nest       = "  "
     childGw    = withDiag childDiag (gutterWidth . context)
     childSnippet = withDiag childDiag
-      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goPalette opts) (goTabWidth opts) childGw (context ce))
+      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
     childRelated = relatedForest opts glyphs childGw (T.replicate (childGw + 1) " ") node
     childSep     = [T.replicate (childGw + 1) " " <> gRail glyphs
                    | not (null childSnippet) && not (null childRelated)]
@@ -274,16 +318,27 @@ withDiag (SomeDiagnostic e) f = f e
 
 -- === Small helpers ========================================================
 
+-- | Render a 'Doc' to a single line: embedded newlines (e.g. in a label or
+-- message) are flattened to spaces so they can never break the caret/gutter
+-- layout (mirrors miette's multi-line-label robustness fix, #318).
 docToText :: Doc ann -> Text
-docToText = renderStrict . layoutPretty (LayoutOptions Unbounded)
+docToText = T.map flat . renderStrict . layoutPretty (LayoutOptions Unbounded)
+  where flat c = if isControl c then ' ' else c   -- strip control chars: no terminal-escape injection
 
 docText :: Maybe (Doc Ann) -> Maybe Text
 docText = fmap docToText
 
-lineAt :: [Text] -> Int -> Text
-lineAt ls n
-  | n >= 1 && n <= length ls = ls !! (n - 1)
-  | otherwise                = ""
+-- | Replace control characters (except tab, handled by 'expandTabs') with a
+-- space, so attacker-controlled source can't inject terminal escape sequences.
+-- Width-preserving (every control char is width 1), so caret columns are unmoved.
+sanitizeLine :: Text -> Text
+sanitizeLine = T.map (\c -> if isControl c && c /= '\t' then ' ' else c)
+
+-- | Text of line @n@ within a fetched window, or @""@ if absent. Total.
+lineLookup :: [(Int, Text)] -> Int -> Text
+lineLookup win n = case [ t | (m, t) <- win, m == n ] of
+  (t : _) -> t
+  []      -> ""
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

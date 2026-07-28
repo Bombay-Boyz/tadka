@@ -19,6 +19,7 @@ module Tadka.Internal.Config
   , withUnicodeMode
   , withRelatedDepthLimit
   , withTabWidth
+  , withContextLines
   , withLabelPalette
   , withTarget
     -- * Internal field accessors (for selectRenderer only; not re-exported by "Tadka")
@@ -26,6 +27,7 @@ module Tadka.Internal.Config
   , configUnicodeMode
   , configRelatedDepth
   , configTabWidth
+  , configContextLines
   , configPalette
   , configTarget
   ) where
@@ -57,6 +59,7 @@ data Config = Config
   , configRelatedDepth :: Natural
   , configPalette      :: NonEmpty AnsiStyle
   , configTabWidth     :: Int            -- ^ tab stop width for source rendering (>= 1)
+  , configContextLines :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
   , configTarget       :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
   }
   deriving (Eq, Show)
@@ -77,6 +80,7 @@ defaultConfig = Config
   , configRelatedDepth = defaultRelatedDepth
   , configPalette      = defaultPalette
   , configTabWidth     = 4
+  , configContextLines = Nothing
   , configTarget       = Nothing
   }
 
@@ -93,6 +97,12 @@ withRelatedDepthLimit n c = c { configRelatedDepth = n }
 -- multiple of this width). Values below 1 are treated as 1 by the renderer.
 withTabWidth :: Int -> Config -> Config
 withTabWidth n c = c { configTabWidth = n }
+
+-- | Show @n@ lines of context above and below each labelled line and elide the
+-- gaps between distant labels. Unset (the default) renders the contiguous range
+-- from the first to the last labelled line, with no elision.
+withContextLines :: Int -> Config -> Config
+withContextLines n c = c { configContextLines = Just n }
 
 withLabelPalette :: NonEmpty AnsiStyle -> Config -> Config
 withLabelPalette p c = c { configPalette = p }

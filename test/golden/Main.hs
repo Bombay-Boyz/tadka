@@ -25,7 +25,7 @@ import           Prettyprinter.Render.Text (renderStrict)
 import           System.Environment        (lookupEnv)
 import           System.Exit               (exitFailure)
 
-import           Fixtures                  (fixtures, generatedSource, jsonFixtures,
+import           Fixtures                  (contextFixtures, fixtures, generatedSource, jsonFixtures,
                                             narratableFixtures)
 import           Tadka
 
@@ -36,6 +36,14 @@ cfg = withColorMode ColorNever
     $ defaultConfig
 
 renderFix :: SomeDiagnostic -> Text
+cfgCtx :: Config
+cfgCtx = withContextLines 1 cfg
+
+renderCtx :: SomeDiagnostic -> Text
+renderCtx (SomeDiagnostic e) = case selectRenderer cfgCtx of
+  SomeRenderer r@(Graphical _) -> renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
+  _                            -> ""
+
 renderFix (SomeDiagnostic e) = case selectRenderer cfg of
   SomeRenderer r@(Graphical _) ->
     renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
@@ -97,6 +105,7 @@ allFixtures =
      [ (n, renderFix d)  | (n, d) <- fixtures ]
   ++ [ (n, renderNarr d) | (n, d) <- narratableFixtures ]
   ++ [ (n, renderJs d)   | (n, d) <- jsonFixtures ]
+  ++ [ (n, renderCtx d) | (n, d) <- contextFixtures ]
   ++ [ ("generated-parseerror", T.pack generatedSource) ]
 
 fixturePath :: String -> FilePath

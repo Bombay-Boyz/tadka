@@ -24,7 +24,7 @@ module Tadka.Internal.Width
   , ucdVersion
   ) where
 
-import           Data.Array            (Array, bounds, listArray, (!))
+import           Data.Array            (Array, bounds, inRange, listArray, (!))
 import           Data.Char             (ord)
 import qualified Data.Text.Lazy         as TL
 import qualified Data.Text.Lazy.Builder as TB
@@ -137,6 +137,14 @@ mkArr :: [(Int, Int)] -> Array Int (Int, Int)
 mkArr xs = listArray (0, length xs - 1) xs
 
 -- | Binary search: is @x@ inside any inclusive range in the (ascending) array?
+-- | Total array indexing: 'Nothing' when the index is out of bounds. The
+-- binary searches below only ever index in bounds, but this keeps the partial
+-- @(!)@ encapsulated so no caller uses a partial function.
+atMay :: Array Int e -> Int -> Maybe e
+atMay arr i
+  | inRange (bounds arr) i = Just (arr ! i)
+  | otherwise              = Nothing
+
 inRanges :: Array Int (Int, Int) -> Int -> Bool
 inRanges arr x = go lo0 hi0
   where
@@ -144,11 +152,13 @@ inRanges arr x = go lo0 hi0
     go lo hi
       | lo > hi = False
       | otherwise =
-          let m = (lo + hi) `div` 2
-              (a, b) = arr ! m
-          in if x < a then go lo (m - 1)
-             else if x > b then go (m + 1) hi
-             else True
+          case atMay arr ((lo + hi) `div` 2) of
+            Nothing     -> False          -- unreachable: lo <= mid <= hi
+            Just (a, b)
+              | x < a     -> go lo (mid - 1)
+              | x > b     -> go (mid + 1) hi
+              | otherwise -> True
+          where mid = (lo + hi) `div` 2
 
 -- | Binary search returning the payload of the range containing @x@, if any.
 searchRanges :: Array Int (Int, Int, a) -> Int -> Maybe a
@@ -158,8 +168,10 @@ searchRanges arr x = go lo0 hi0
     go lo hi
       | lo > hi = Nothing
       | otherwise =
-          let m = (lo + hi) `div` 2
-              (a, b, v) = arr ! m
-          in if x < a then go lo (m - 1)
-             else if x > b then go (m + 1) hi
-             else Just v
+          case atMay arr ((lo + hi) `div` 2) of
+            Nothing        -> Nothing      -- unreachable: lo <= mid <= hi
+            Just (a, b, v)
+              | x < a     -> go lo (mid - 1)
+              | x > b     -> go (mid + 1) hi
+              | otherwise -> Just v
+          where mid = (lo + hi) `div` 2

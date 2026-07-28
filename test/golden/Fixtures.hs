@@ -7,6 +7,7 @@ module Fixtures
   ( fixtures
   , narratableFixtures
   , jsonFixtures
+  , contextFixtures
   , generatedSource
   ) where
 
@@ -50,6 +51,37 @@ label t = Just (pretty t)
 -- 1. Single label -----------------------------------------------------------
 src1 :: NamedSource
 src1 = rightOrErr (mkNamedSource "example.hs" "line1\nline2\nlet x = foo + 1\n")
+
+-- A span that crosses lines, to exercise the connector lanes (Phase III).
+multiLine :: Fix
+multiLine = Fix
+  { fMsg  = "unterminated function call"
+  , fCode = Just (mkCode "tadka::E0300")
+  , fCtx  = buildContext srcCall
+              [ (rightOrErr (mkSpan 8 22), label "opened here, never closed") ]
+  , fHelp = Just "add a closing `)`"
+  , fUrl  = Nothing, fRel = [], fId = Nothing
+  }
+
+srcCall :: NamedSource
+srcCall = rightOrErr (mkNamedSource "call.hs" "let x = foo(\n    bar,\n    baz)\n")
+
+-- Labels far apart, to exercise context lines + gap elision (rendered with
+-- withContextLines 1 in the golden harness).
+farApart :: Fix
+farApart = Fix
+  { fMsg  = "two distant problems"
+  , fCode = Just (mkCode "tadka::E0200")
+  , fCtx  = buildContextWith srcTen
+              [ (rightOrErr (mkSpan 4 2),  Secondary, label "first")
+              , (rightOrErr (mkSpan 40 4), Primary,   label "second")
+              ]
+  , fHelp = Nothing, fUrl = Nothing, fRel = [], fId = Nothing
+  }
+
+srcTen :: NamedSource
+srcTen = rightOrErr (mkNamedSource "big.hs"
+  "one aaa\ntwo bbb\nthree c\nfour dd\nfive ee\nsix fff\nseven g\neight h\nnine ii\nten jjj\n")
 
 -- A minimal chainable diagnostic for exercising the cause chain (Part B).
 data CauseNode = CauseNode Text (Maybe DiagnosticCode) (Maybe SomeDiagnostic)
@@ -139,6 +171,7 @@ fixtures =
   , ("cycle-omitted", SomeDiagnostic cyc)
   , ("tab-indented",  SomeDiagnostic tabIndented)
   , ("with-cause",    SomeDiagnostic withCause)
+  , ("multi-line",     SomeDiagnostic multiLine)
   ]
 
 -- Tab-indented source: the caret must align under the tab-EXPANDED position.
@@ -184,6 +217,10 @@ narratableFixtures =
 
 -- JSON fixtures (rendered at depth limit 1 by the runner): single (matches the
 -- vision example), cycle (cycleOmitted flag), truncated (nested truncated flag).
+contextFixtures :: [(String, SomeDiagnostic)]
+contextFixtures =
+  [ ("context-elision", SomeDiagnostic farApart) ]
+
 jsonFixtures :: [(String, SomeDiagnostic)]
 jsonFixtures =
   [ ("json-single",    SomeDiagnostic single)
