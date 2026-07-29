@@ -53,6 +53,7 @@ module Tadka
   , withUnicodeMode
   , withRelatedDepthLimit
   , withTabWidth
+  , withContextLines
   , withLabelPalette
   , withTarget
   , ColorMode (..)

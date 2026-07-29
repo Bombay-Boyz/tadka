@@ -1,0 +1,11 @@
+error[tadka::E0200]: two distant problems
+  ┌─ big.hs:6:1
+  │
+1 │ one aaa
+  │     -- first
+2 │ two bbb
+  ⋮
+5 │ five ee
+6 │ six fff
+  │ ^^^^ second
+7 │ seven g

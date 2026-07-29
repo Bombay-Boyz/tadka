@@ -24,7 +24,9 @@ module Tadka.Internal.Renderer.Json
 
 import           Data.Aeson                (ToJSON (..), Value, object, (.=))
 import qualified Data.List.NonEmpty        as NE
+import           Data.Char                 (isControl)
 import           Data.Text                 (Text)
+import qualified Data.Text                 as T
 import           Numeric.Natural           (Natural)
 import           Prettyprinter             (Doc, LayoutOptions (..),
                                             PageWidth (Unbounded), layoutPretty)
@@ -158,4 +160,5 @@ causeDTO (SomeDiagnostic e) = CauseDTO (unDiagnosticCode <$> code e) (docToText 
 -- Plain-text rendering of an annotated document (annotations discarded); JSON
 -- string values carry the raw message\/label\/help text.
 docToText :: Doc Ann -> Text
-docToText = renderStrict . layoutPretty (LayoutOptions Unbounded)
+docToText = T.map (\c -> if isControl c then ' ' else c)
+          . renderStrict . layoutPretty (LayoutOptions Unbounded)

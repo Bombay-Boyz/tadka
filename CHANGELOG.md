@@ -5,6 +5,94 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
 
 ## Unreleased — miette-parity hardening
 
+### Security hardening (untrusted-input robustness)
+- **Terminal-escape / control-character injection (High).** Raw control
+  characters (`ESC`, `BEL`, `BS`, DEL, C1) in attacker-controlled source or label
+  text previously passed through verbatim into graphical and narratable output,
+  even in `ColorNever` mode — a terminal-injection vector when diagnosing
+  untrusted code. All three handlers now strip control characters from rendered
+  text (source lines keep `\t` for tab expansion; the substitution is
+  width-preserving so caret columns are unmoved). JSON is included because aeson
+  escapes only `<0x20`, leaving DEL/C1 raw. A property asserts no control
+  character other than the `\n` line separator survives in any handler's output
+  over adversarial generated input.
+- **Unbounded output from wide spans (Medium, availability).** A span across a
+  huge line range rendered output proportional to the span (a line-1→5000 span
+  produced 5002 lines). The planner now caps the contiguous range and falls back
+  to a bounded context window with elision, so output is proportional to the
+  diagnostic, not the span (that case now renders ~11 lines); every labelled line
+  still appears. Small diagnostics are unchanged, so golden fixtures stay
+  byte-identical. A property bounds output for a 10000-line span.
+
+
+### Robustness: production edge cases mined from miette's history
+- Added a `Production edge cases (from miette)` property group translating
+  miette's bug-fix history into tadka tests, and fixed the two gaps it exposed:
+  CRLF (`\r\n`) sources left a stray carriage return in rendered lines
+  (miette #37) — `SourceCode` now strips a trailing `\r` per line; and a newline
+  embedded in a label or message could break the caret/gutter layout
+  (miette #318) — the graphical and narratable handlers now flatten newlines in
+  rendered text fragments to spaces (JSON keeps them, escaped). tadka was
+  already robust to the rest: zero-length/point spans (#204/#159/#32), spans
+  past end-of-line/EOF (#221/#347), empty sources (#183), offset-0 labels,
+  wide-char + tab alignment (#202), combining marks (#312/#314), nested/
+  overlapping spans (#316), and multi-line spans not skipping lines (#81), plus
+  a totality sweep over out-of-range spans on all three targets.
+
+
+### Snippet renderer rework — Phase III: multi-line span rendering
+- Multi-line spans (start line < end line) are no longer clamped to the start
+  line: they render with a connector gutter between the rail and the source —
+  `\x256D` opening, `\x2502` continuation, `\x2570` closing (ASCII `/`, `|`,
+  `\\`) — with the label shown inline on the closing line. The pure core lives
+  in `Tadka.Internal.Renderer.Layout`: greedy interval-graph lane assignment so
+  overlapping spans get distinct lanes while disjoint spans reuse one, plus a
+  `cellAt` classifier. It is glyph-free and Int-only, so it is fully proven:
+  distinct spans on one lane never share a line (the collision proof), lanes are
+  contiguous, coverage is order-preserving, and `cellAt` classifies correctly.
+  End-to-end properties add that every multi-line span draws exactly one opening
+  and one closing corner and that the label text is shown — the second of which
+  caught a real lane-reuse bug (a lane hosting two disjoint spans rendered only
+  the first) before it could ship. Single-line diagnostics are unaffected (the
+  gutter has zero width when there are no multi-line spans), so all existing
+  golden fixtures stay byte-identical; a `multi-line` fixture locks the art.
+- Note: multiple single-line labels on the same line still render as stacked
+  caret lines (correct, and unchanged) rather than horizontally packed onto one
+  line with routed connectors. True same-line packing is deferred as optional
+  polish; it does not fall out of the multi-line lane engine as cleanly as first
+  thought, and stacked carets are unambiguous.
+
+### Snippet renderer rework — Phase II: context lines + gap elision
+- New pure planner `Tadka.Internal.Renderer.LinePlan` (`PlanEntry`, `planLines`)
+  decides which source lines to render and where to elide, as an IR between
+  resolved labels and glyphs. `withContextLines n` shows n lines around each
+  labelled line and elides the gaps (a `⋮` marker); unset (default) renders the
+  contiguous labelled range with no elision, so all golden fixtures stay
+  byte-identical. The graphical window fetch now derives from the plan's shown
+  lines (via `SourceCode.scLineCount`), not the anchor range. Properties prove
+  the planner is total, `Nothing` reproduces the contiguous range, and with
+  context every in-range anchor is shown, line numbers strictly increase and
+  stay in bounds, and every elision hides at least one line.
+
+### Snippet renderer rework — Phase I: pluggable SourceCode
+- New `Tadka.Internal.SourceCode` class: a total, windowed source-reading seam
+  (`scName`, `scLines (firstLine, lastLine)`). `NamedSource` is the canonical
+  in-memory instance; the graphical and narratable handlers now fetch only the
+  line window they render through it, so a lazy/file-backed instance is possible
+  later. Pure refactor — all golden fixtures byte-identical. Properties prove the
+  instance is total and its windows equal a filter of the full line enumeration.
+
+
+### Totality: no partial functions in the library
+- Removed every use of a partial function primitive from `src/`. `head`/`!!`,
+  `maximum`/`minimum`, and `Data.Array.(!)` are gone from all call sites: caret
+  layout and line lookup now pattern-match `drop`; gutter/line-range use
+  `foldr max`/`foldr min` with seeds; palette indexing uses total `NonEmpty`
+  operations; and array indexing is encapsulated in a single total `atMay`
+  (guarded by `inRange`, returning `Maybe`). Behaviour is unchanged — all 14
+  golden fixtures remain byte-identical — so this is a pure totality hardening.
+
+
 ### Primary vs secondary labels
 - Labels now carry a `LabelKind` (`Primary`/`Secondary`). `buildContext` marks
   everything `Primary` (so existing callers and fixtures are unchanged); a new

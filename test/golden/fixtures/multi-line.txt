@@ -1,0 +1,8 @@
+error[tadka::E0300]: unterminated function call
+  ┌─ call.hs:1:9
+  │
+1 │ ╭ let x = foo(
+2 │ │     bar,
+3 │ ╰     baz)  opened here, never closed
+  │
+  = help: add a closing `)`

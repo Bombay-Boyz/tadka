@@ -3,19 +3,20 @@ name:               tadka
 version:            1.0.0.0
 synopsis:           Beautiful, structured, provably-correct diagnostic reports for Haskell.
 description:
-  A diagnostic reporting framework for Haskell inspired by
+  A diagnostic reporting framework for Haskell targeting feature parity with
   Rust's @miette@: structured error types, three pluggable report renderers
   (graphical, narratable, JSON), error codes with documentation links,
   related-error chains, labeled multi-span source snippets, and derive-macro
-  ergonomics.
-  
-  
+  ergonomics. See @Tadka_Vision_v5.md@.
+  .
+  This release is the Phase 0 skeleton: module layout, dependency pins, and
+  independently-runnable test suites. No functionality is implemented yet.
 category:           Development, Error Handling
 license:            BSD-3-Clause
 license-file:       LICENSE
-author:             csn
-maintainer:         bombay.boyz@hotmail.com
-copyright:          (c) 2026 csn
+author:             the tadka authors
+maintainer:         tadka@example.org
+copyright:          (c) 2026 the tadka authors
 build-type:         Simple
 tested-with:        GHC ==9.10.1
 extra-doc-files:    CHANGELOG.md
@@ -61,10 +62,13 @@ library
                     Tadka.Internal.Related
                     Tadka.Internal.Config
                     Tadka.Internal.Render
+                    Tadka.Internal.SourceCode
                     Tadka.Internal.Terminal
                     Tadka.Internal.Renderer.Graphical
                     Tadka.Internal.Renderer.Narratable
                     Tadka.Internal.Renderer.Json
+                    Tadka.Internal.Renderer.LinePlan
+                    Tadka.Internal.Renderer.Layout
                     Tadka.Internal.TH
                     Tadka.Internal.Generics
                     Tadka.Internal.Interop
@@ -119,6 +123,11 @@ test-suite props
                     TermColor
                     Labels
                     Cause
+                    Source
+                    LinePlanSpec
+                    LayoutSpec
+                    MultiLine
+                    EdgeCases
                     GenDiag
   build-depends:    base
                   , tadka

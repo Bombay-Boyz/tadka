@@ -2,13 +2,11 @@
 
 > **Point at the problem. Say it clearly. Make it beautiful.**
 
-A diagnostic reporting framework for Haskell, inspired from
+A diagnostic reporting framework for Haskell, targeting full feature parity with
 Rust's [`miette`](https://github.com/zkat/miette): structured error types, three
 pluggable renderers (graphical / narratable / JSON), error codes with doc links,
 related-error chains, labeled multi-span source snippets, and derive-macro
 ergonomics.
-
-"Tadka" in hindi means tempering. Adds colour, flavour and appeal to food. Hope fully this will add some colour and appeal to resolving haskell errors when developers see it
 
 Design: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`.
 
@@ -32,7 +30,7 @@ the same line/column the upstream library reports.
 and one-or-more `Span` fields (span field names become label text), calling the
 same `buildContext`. Its `e -> Context` type means it can touch nothing else;
 the record shape is checked at compile time. Proved equal to a hand-written twin
-across all three handlers.
+across all three handlers
 
 **Phase 8 — `deriveDiagnostic` macro.** An ordinary Template Haskell splice
 (`DiagnosticSpec` + `defaultSpec` + `deriveDiagnostic`) that `reify`-validates
@@ -63,16 +61,16 @@ non-negative width-aware carets, palette cycling, and totality.
 
 ## Module layout (fixed in Phase 0)
 
-| Module | Role | Compatibility |
-|---|---|---|
-| `Tadka` | Sole supported public API surface | Stable (from v1) |
-| `Tadka.Internal` | Shared functions both the derive macro and manual instances call | None |
-| `Tadka.Internal.Width` | Bundled Unicode width / grapheme table | None |
-| `Tadka.Internal.Context` | `buildContext` and context construction | None |
-| `Tadka.Internal.Renderer.{Graphical,Narratable,Json}` | The three report handlers | None |
-| `Tadka.Internal.TH` | `deriveDiagnostic` splice | None |
-| `Tadka.Internal.Generics` | Generics-based `context` label-wiring | None |
-| `Tadka.Internal.Interop` | Namespace for Phase 10 parser adapters | None |
+| Module                                                | Role                                                             | Compatibility    |
+| ----------------------------------------------------- | ---------------------------------------------------------------- | ---------------- |
+| `Tadka`                                               | Sole supported public API surface                                | Stable (from v1) |
+| `Tadka.Internal`                                      | Shared functions both the derive macro and manual instances call | None             |
+| `Tadka.Internal.Width`                                | Bundled Unicode width / grapheme table                           | None             |
+| `Tadka.Internal.Context`                              | `buildContext` and context construction                          | None             |
+| `Tadka.Internal.Renderer.{Graphical,Narratable,Json}` | The three report handlers                                        | None             |
+| `Tadka.Internal.TH`                                   | `deriveDiagnostic` splice                                        | None             |
+| `Tadka.Internal.Generics`                             | Generics-based `context` label-wiring                            | None             |
+| `Tadka.Internal.Interop`                              | Namespace for Phase 10 parser adapters                           | None             |
 
 ## Building
 
