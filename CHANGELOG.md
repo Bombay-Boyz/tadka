@@ -5,6 +5,28 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
 
 ## Unreleased — miette-parity hardening
 
+### Terminal hyperlinks: OSC 8 for the `= see:` URL
+- The graphical handler now wraps a diagnostic's `url` in an OSC 8 terminal
+  hyperlink escape when `HyperlinkMode` allows it, so a supporting terminal
+  renders the `= see:` line as a clickable link instead of plain text a user
+  must select and copy by hand. New `HyperlinkMode` (`Auto`/`Always`/`Never`,
+  mirroring `ColorMode`/`UnicodeMode`) and `withHyperlinkMode`; `TerminalCaps`
+  gains `capNoHyperlink`/`capForceHyperlink` (`NO_HYPERLINK`/`FORCE_HYPERLINK`
+  — the latter an existing convention from the `supports-hyperlinks` package)
+  and `resolveHyperlink` resolves `Auto` the same three-tier way `resolveColor`
+  does. Defaults to `HyperlinkNever`, not `Auto` (unlike colour/Unicode): OSC 8
+  has no reliable capability query the way TTY-ness does, so defaulting off
+  keeps every existing caller's output byte-for-byte unchanged until they opt
+  in. Narratable and JSON output are untouched — this is a graphical-only
+  affordance. Only ever wraps an already-validated `Url` (never raw `Text`), so
+  the wrap is injection-safe by construction rather than by an extra runtime
+  check: `mkUrl`'s absolute-URI grammar has no production admitting a raw
+  control byte. A new `single-label-hyperlink` golden fixture pins the exact
+  escape bytes; a dedicated property group proves the resolver mirrors colour's
+  three-tier law, the wrap touches only the URL (a diagnostic without one
+  renders identically under `Always` and `Never`), and `Never` output never
+  contains an escape.
+
 ### Security hardening (untrusted-input robustness)
 - **Terminal-escape / control-character injection (High).** Raw control
   characters (`ESC`, `BEL`, `BS`, DEL, C1) in attacker-controlled source or label

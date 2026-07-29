@@ -121,6 +121,7 @@ test-suite props
                     Phase11
                     Tabs
                     TermColor
+                    Hyperlink
                     Labels
                     Cause
                     Source

@@ -35,7 +35,8 @@ import           Prettyprinter.Render.Text      (renderStrict)
 import           Tadka.Internal.Ann             (Ann)
 import           Tadka.Internal.Config
                    (Config, Target (..), configColorMode, configPalette,
-                    configContextLines, configRelatedDepth, configTabWidth, configTarget, configUnicodeMode)
+                    configContextLines, configHyperlinkMode, configRelatedDepth,
+                    configTabWidth, configTarget, configUnicodeMode)
 import           Tadka.Internal.Diagnostic      (Diagnostic)
 import           Tadka.Internal.Terminal        (detectTerminalCaps, resolveConfig)
 import           Tadka.Internal.Renderer.Graphical
@@ -73,12 +74,13 @@ selectRenderer cfg =
     TGraphical ->
       SomeRenderer . Graphical $
         GraphicalOptions
-          { goColorMode    = configColorMode cfg
-          , goUnicodeMode  = configUnicodeMode cfg
-          , goPalette      = configPalette cfg
-          , goRelatedDepth = configRelatedDepth cfg
-          , goTabWidth     = configTabWidth cfg
-          , goContextLines = configContextLines cfg
+          { goColorMode     = configColorMode cfg
+          , goUnicodeMode   = configUnicodeMode cfg
+          , goHyperlinkMode = configHyperlinkMode cfg
+          , goPalette       = configPalette cfg
+          , goRelatedDepth  = configRelatedDepth cfg
+          , goTabWidth      = configTabWidth cfg
+          , goContextLines  = configContextLines cfg
           }
     TNarratable ->
       SomeRenderer (Narratable (NarratableOptions (configRelatedDepth cfg)))

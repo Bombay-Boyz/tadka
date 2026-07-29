@@ -10,6 +10,7 @@ module Tadka.Internal.Config
     Target (..)
   , ColorMode (..)
   , UnicodeMode (..)
+  , HyperlinkMode (..)
     -- * Config (opaque)
   , Config
   , defaultConfig
@@ -17,6 +18,7 @@ module Tadka.Internal.Config
     -- * Setters
   , withColorMode
   , withUnicodeMode
+  , withHyperlinkMode
   , withRelatedDepthLimit
   , withTabWidth
   , withContextLines
@@ -25,6 +27,7 @@ module Tadka.Internal.Config
     -- * Internal field accessors (for selectRenderer only; not re-exported by "Tadka")
   , configColorMode
   , configUnicodeMode
+  , configHyperlinkMode
   , configRelatedDepth
   , configTabWidth
   , configContextLines
@@ -51,16 +54,23 @@ data ColorMode = ColorAuto | ColorAlways | ColorNever
 data UnicodeMode = UnicodeAuto | UnicodeAlways | UnicodeAscii
   deriving (Eq, Show, Enum, Bounded)
 
+-- | When to wrap displayed URLs (currently just the @= see:@ line, vision §7)
+-- in an OSC 8 terminal hyperlink escape, so a supporting terminal renders them
+-- as clickable text instead of plain text a user must select and open by hand.
+data HyperlinkMode = HyperlinkAuto | HyperlinkAlways | HyperlinkNever
+  deriving (Eq, Show, Enum, Bounded)
+
 -- | Opaque rendering configuration. Build from 'defaultConfig' with the
 -- @with*@ setters.
 data Config = Config
-  { configColorMode    :: ColorMode
-  , configUnicodeMode  :: UnicodeMode
-  , configRelatedDepth :: Natural
-  , configPalette      :: NonEmpty AnsiStyle
-  , configTabWidth     :: Int            -- ^ tab stop width for source rendering (>= 1)
-  , configContextLines :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
-  , configTarget       :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
+  { configColorMode     :: ColorMode
+  , configUnicodeMode   :: UnicodeMode
+  , configHyperlinkMode :: HyperlinkMode
+  , configRelatedDepth  :: Natural
+  , configPalette       :: NonEmpty AnsiStyle
+  , configTabWidth      :: Int            -- ^ tab stop width for source rendering (>= 1)
+  , configContextLines  :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
+  , configTarget        :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
   }
   deriving (Eq, Show)
 
@@ -71,17 +81,24 @@ defaultPalette :: NonEmpty AnsiStyle
 defaultPalette =
   color Red :| [color Green, color Yellow, color Blue, color Magenta, color Cyan]
 
--- | Sensible defaults: auto colour, auto Unicode, depth limit 8, the default
--- palette, and no explicit target (auto).
+-- | Sensible defaults: auto colour, auto Unicode, hyperlinks off, depth limit
+-- 8, the default palette, and no explicit target (auto).
+--
+-- Hyperlinks default to 'HyperlinkNever' rather than 'HyperlinkAuto', unlike
+-- colour/Unicode: OSC 8 has no reliable capability query the way TTY-ness
+-- does, so a terminal that reports 'capIsTerminal' may still not render the
+-- escape as a link. Defaulting off keeps existing callers' output
+-- byte-for-byte unchanged until they opt in with 'withHyperlinkMode'.
 defaultConfig :: Config
 defaultConfig = Config
-  { configColorMode    = ColorAuto
-  , configUnicodeMode  = UnicodeAuto
-  , configRelatedDepth = defaultRelatedDepth
-  , configPalette      = defaultPalette
-  , configTabWidth     = 4
-  , configContextLines = Nothing
-  , configTarget       = Nothing
+  { configColorMode     = ColorAuto
+  , configUnicodeMode   = UnicodeAuto
+  , configHyperlinkMode = HyperlinkNever
+  , configRelatedDepth  = defaultRelatedDepth
+  , configPalette       = defaultPalette
+  , configTabWidth      = 4
+  , configContextLines  = Nothing
+  , configTarget        = Nothing
   }
 
 withColorMode :: ColorMode -> Config -> Config
@@ -89,6 +106,9 @@ withColorMode m c = c { configColorMode = m }
 
 withUnicodeMode :: UnicodeMode -> Config -> Config
 withUnicodeMode m c = c { configUnicodeMode = m }
+
+withHyperlinkMode :: HyperlinkMode -> Config -> Config
+withHyperlinkMode m c = c { configHyperlinkMode = m }
 
 withRelatedDepthLimit :: Natural -> Config -> Config
 withRelatedDepthLimit n c = c { configRelatedDepth = n }

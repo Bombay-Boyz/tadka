@@ -26,7 +26,7 @@ import           System.Environment        (lookupEnv)
 import           System.Exit               (exitFailure)
 
 import           Fixtures                  (contextFixtures, fixtures, generatedSource, jsonFixtures,
-                                            narratableFixtures)
+                                            narratableFixtures, single)
 import           Tadka
 
 cfg :: Config
@@ -48,6 +48,17 @@ renderFix (SomeDiagnostic e) = case selectRenderer cfg of
   SomeRenderer r@(Graphical _) ->
     renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
   _ -> "<<not graphical>>"
+
+-- Same as 'cfg' but with hyperlinks turned on, to pin the OSC 8 escape bytes
+-- byte-for-byte (proves the wrap touches only the "= see:" line — everything
+-- else must match "single-label" exactly).
+hyperlinkCfg :: Config
+hyperlinkCfg = withHyperlinkMode HyperlinkAlways cfg
+
+renderHyperlink :: SomeDiagnostic -> Text
+renderHyperlink (SomeDiagnostic e) = case selectRenderer hyperlinkCfg of
+  SomeRenderer r@(Graphical _) -> renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
+  _                            -> "<<not graphical>>"
 
 -- Narratable fixtures render at a low depth limit so the truncation marker fires.
 narrCfg :: Config
@@ -107,6 +118,7 @@ allFixtures =
   ++ [ (n, renderJs d)   | (n, d) <- jsonFixtures ]
   ++ [ (n, renderCtx d) | (n, d) <- contextFixtures ]
   ++ [ ("generated-parseerror", T.pack generatedSource) ]
+  ++ [ ("single-label-hyperlink", renderHyperlink (SomeDiagnostic single)) ]
 
 fixturePath :: String -> FilePath
 fixturePath name = "test/golden/fixtures/" <> name <> ".txt"
