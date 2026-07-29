@@ -9,6 +9,7 @@ module Fixtures
   , jsonFixtures
   , contextFixtures
   , generatedSource
+  , single
   ) where
 
 import           Data.Text     (Text)

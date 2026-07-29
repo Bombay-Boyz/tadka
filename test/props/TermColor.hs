@@ -46,7 +46,7 @@ group = Group "Terminal detection & colour"
 -- === generators ===========================================================
 
 genCaps :: Gen TerminalCaps
-genCaps = TerminalCaps <$> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool
+genCaps = TerminalCaps <$> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool
 
 genColor :: Gen ColorMode
 genColor = Gen.element [ColorAuto, ColorAlways, ColorNever]

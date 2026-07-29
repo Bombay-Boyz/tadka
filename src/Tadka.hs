@@ -51,6 +51,7 @@ module Tadka
   , defaultConfig
   , withColorMode
   , withUnicodeMode
+  , withHyperlinkMode
   , withRelatedDepthLimit
   , withTabWidth
   , withContextLines
@@ -58,6 +59,7 @@ module Tadka
   , withTarget
   , ColorMode (..)
   , UnicodeMode (..)
+  , HyperlinkMode (..)
     -- * Renderers and the render path
   , Target (..)
   , Output

@@ -11,7 +11,9 @@
 -- character is @^@ and the palette (see 'labelStyle') distinguishes labels via
 -- ANSI at the terminal boundary. Column maths go through
 -- "Tadka.Internal.Width", so combining marks, East-Asian-width, and emoji are
--- accounted for.
+-- accounted for. The @= see:@ line's URL is wrapped in an OSC 8 hyperlink
+-- escape when 'HyperlinkMode' allows it (see 'hyperlink'), independently of
+-- colour.
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Renderer.Graphical
@@ -37,7 +39,8 @@ import qualified Prettyprinter.Render.Terminal as Term
 import           Prettyprinter.Render.Text     (renderStrict)
 
 import           Tadka.Internal.Ann            (Ann)
-import           Tadka.Internal.Config         (ColorMode (..), UnicodeMode (..))
+import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
+                                                UnicodeMode (..))
 import           Tadka.Internal.Context        (Context (..), LabelKind (..),
                                                 LabelState (..), Labeled (..))
 import           Tadka.Internal.SourceCode     (SourceCode (..))
@@ -51,19 +54,20 @@ import           Tadka.Internal.Span           (LineCol (..), ResolvedSpan, reso
                                                 resolvedStart, spanLength)
 import           Tadka.Internal.Types          (DiagnosticCode,
                                                 Severity (..), SeverityLabels (..),
-                                                severityLabels,
+                                                Url, severityLabels,
                                                 unDiagnosticCode, unLength, unUrl)
 import           Tadka.Internal.Width          (displayColumnAt, expandTabs)
 
 -- | Resolved settings the graphical handler renders from (populated only by
 -- @selectRenderer@).
 data GraphicalOptions = GraphicalOptions
-  { goColorMode    :: ColorMode
-  , goUnicodeMode  :: UnicodeMode
-  , goPalette      :: NonEmpty AnsiStyle
-  , goRelatedDepth :: Natural
-  , goTabWidth     :: Int
-  , goContextLines :: Maybe Int
+  { goColorMode     :: ColorMode
+  , goUnicodeMode   :: UnicodeMode
+  , goHyperlinkMode :: HyperlinkMode
+  , goPalette       :: NonEmpty AnsiStyle
+  , goRelatedDepth  :: Natural
+  , goTabWidth      :: Int
+  , goContextLines  :: Maybe Int
   }
   deriving (Eq, Show)
 
@@ -90,6 +94,41 @@ colorize :: ColorMode -> AnsiStyle -> Text -> Text
 colorize ColorNever _ t = t
 colorize _ style t =
   Term.renderStrict (layoutPretty (LayoutOptions Unbounded) (annotate style (pretty t)))
+
+-- | Wrap already-displayed text in an OSC 8 terminal-hyperlink escape pointing
+-- at @url@, unless hyperlinks are off. Mirrors 'colorize': 'HyperlinkNever'
+-- returns the text untouched (so plain output — every existing golden fixture
+-- — carries no escape), any other mode wraps it.
+--
+-- Takes a 'Url', never raw 'Text', so only an already-validated value — one
+-- that has passed 'Tadka.Internal.Types.mkUrl''s absolute-URI check — can ever
+-- be interpolated into the escape. 'mkUrl' delegates to
+-- 'Network.URI.parseAbsoluteURI', whose RFC 3986 grammar has no production
+-- admitting a raw control character, so a 'Url''s text can never itself
+-- contain the ESC byte that starts (or forges) a terminal escape sequence:
+-- this wrap is injection-safe without any extra stripping here, by
+-- construction rather than by runtime check.
+hyperlink :: HyperlinkMode -> Url -> Text -> Text
+hyperlink HyperlinkNever _ label  = label
+hyperlink _              u label  = oscLinkStart u <> label <> oscLinkEnd
+
+-- | The OSC 8 "open link" escape for a URL: empty params, the URL, then the
+-- string terminator (see 'oscStringTerminator').
+oscLinkStart :: Url -> Text
+oscLinkStart u = "\ESC]8;;" <> unUrl u <> oscStringTerminator
+
+-- | The OSC 8 "close link" escape: the same shape with an empty URL, the
+-- terminal-side convention every OSC 8 implementation shares for ending the
+-- link that the most recent 'oscLinkStart' opened.
+oscLinkEnd :: Text
+oscLinkEnd = "\ESC]8;;" <> oscStringTerminator
+
+-- | The string terminator (@ST@, @ESC \\@) that ends an OSC escape sequence.
+-- Preferred over the historical BEL (@\\a@) terminator: it is the form every
+-- OSC-8-supporting terminal in current use (iTerm2, kitty, VTE-based
+-- terminals, Windows Terminal, …) already documents and accepts.
+oscStringTerminator :: Text
+oscStringTerminator = "\ESC\\"
 
 -- | Header colour by severity (bold + a conventional hue).
 severityStyle :: Severity -> AnsiStyle
@@ -150,7 +189,8 @@ renderRoot opts sd@(SomeDiagnostic e) =
     eqIndent = T.replicate (gw + 1) " "
     header   = headerLine (goColorMode opts) (severity e) (code e) (docToText (message e))
     snip     = snippetLines glyphs (severity e) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
-    trailer  = helpSeeLines gw (fmap docToText (help e)) (fmap unUrl (url e))
+    trailer  = helpSeeLines gw (fmap docToText (help e))
+                 (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
                  ++ causeLines
                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
     causeLines = [ eqIndent <> "= caused by: " <> summaryOf glyphs c

@@ -20,6 +20,7 @@ import qualified Phase9
 import qualified Phase11
 import qualified Tabs
 import qualified TermColor
+import qualified Hyperlink
 import qualified Labels
 import qualified Cause
 import qualified Source
@@ -31,5 +32,5 @@ import qualified EdgeCases
 main :: IO ()
 main = do
   setLocaleEncoding utf8   -- tadka emits Unicode; be locale-independent
-  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Tabs.group, TermColor.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
+  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Tabs.group, TermColor.group, Hyperlink.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
   unless (and results) exitFailure

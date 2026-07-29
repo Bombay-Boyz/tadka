@@ -1,0 +1,741 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0e4ba15..2a2154c 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,28 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
+ 
+ ## Unreleased — miette-parity hardening
+ 
++### Terminal hyperlinks: OSC 8 for the `= see:` URL
++- The graphical handler now wraps a diagnostic's `url` in an OSC 8 terminal
++  hyperlink escape when `HyperlinkMode` allows it, so a supporting terminal
++  renders the `= see:` line as a clickable link instead of plain text a user
++  must select and copy by hand. New `HyperlinkMode` (`Auto`/`Always`/`Never`,
++  mirroring `ColorMode`/`UnicodeMode`) and `withHyperlinkMode`; `TerminalCaps`
++  gains `capNoHyperlink`/`capForceHyperlink` (`NO_HYPERLINK`/`FORCE_HYPERLINK`
++  — the latter an existing convention from the `supports-hyperlinks` package)
++  and `resolveHyperlink` resolves `Auto` the same three-tier way `resolveColor`
++  does. Defaults to `HyperlinkNever`, not `Auto` (unlike colour/Unicode): OSC 8
++  has no reliable capability query the way TTY-ness does, so defaulting off
++  keeps every existing caller's output byte-for-byte unchanged until they opt
++  in. Narratable and JSON output are untouched — this is a graphical-only
++  affordance. Only ever wraps an already-validated `Url` (never raw `Text`), so
++  the wrap is injection-safe by construction rather than by an extra runtime
++  check: `mkUrl`'s absolute-URI grammar has no production admitting a raw
++  control byte. A new `single-label-hyperlink` golden fixture pins the exact
++  escape bytes; a dedicated property group proves the resolver mirrors colour's
++  three-tier law, the wrap touches only the URL (a diagnostic without one
++  renders identically under `Always` and `Never`), and `Never` output never
++  contains an escape.
++
+ ### Security hardening (untrusted-input robustness)
+ - **Terminal-escape / control-character injection (High).** Raw control
+   characters (`ESC`, `BEL`, `BS`, DEL, C1) in attacker-controlled source or label
+diff --git a/src/Tadka.hs b/src/Tadka.hs
+index d24c229..9f6f584 100644
+--- a/src/Tadka.hs
++++ b/src/Tadka.hs
+@@ -51,6 +51,7 @@ module Tadka
+   , defaultConfig
+   , withColorMode
+   , withUnicodeMode
++  , withHyperlinkMode
+   , withRelatedDepthLimit
+   , withTabWidth
+   , withContextLines
+@@ -58,6 +59,7 @@ module Tadka
+   , withTarget
+   , ColorMode (..)
+   , UnicodeMode (..)
++  , HyperlinkMode (..)
+     -- * Renderers and the render path
+   , Target (..)
+   , Output
+diff --git a/src/Tadka/Internal/Config.hs b/src/Tadka/Internal/Config.hs
+index 8506f4a..972fbc1 100644
+--- a/src/Tadka/Internal/Config.hs
++++ b/src/Tadka/Internal/Config.hs
+@@ -10,6 +10,7 @@ module Tadka.Internal.Config
+     Target (..)
+   , ColorMode (..)
+   , UnicodeMode (..)
++  , HyperlinkMode (..)
+     -- * Config (opaque)
+   , Config
+   , defaultConfig
+@@ -17,6 +18,7 @@ module Tadka.Internal.Config
+     -- * Setters
+   , withColorMode
+   , withUnicodeMode
++  , withHyperlinkMode
+   , withRelatedDepthLimit
+   , withTabWidth
+   , withContextLines
+@@ -25,6 +27,7 @@ module Tadka.Internal.Config
+     -- * Internal field accessors (for selectRenderer only; not re-exported by "Tadka")
+   , configColorMode
+   , configUnicodeMode
++  , configHyperlinkMode
+   , configRelatedDepth
+   , configTabWidth
+   , configContextLines
+@@ -51,16 +54,23 @@ data ColorMode = ColorAuto | ColorAlways | ColorNever
+ data UnicodeMode = UnicodeAuto | UnicodeAlways | UnicodeAscii
+   deriving (Eq, Show, Enum, Bounded)
+ 
++-- | When to wrap displayed URLs (currently just the @= see:@ line, vision §7)
++-- in an OSC 8 terminal hyperlink escape, so a supporting terminal renders them
++-- as clickable text instead of plain text a user must select and open by hand.
++data HyperlinkMode = HyperlinkAuto | HyperlinkAlways | HyperlinkNever
++  deriving (Eq, Show, Enum, Bounded)
++
+ -- | Opaque rendering configuration. Build from 'defaultConfig' with the
+ -- @with*@ setters.
+ data Config = Config
+-  { configColorMode    :: ColorMode
+-  , configUnicodeMode  :: UnicodeMode
+-  , configRelatedDepth :: Natural
+-  , configPalette      :: NonEmpty AnsiStyle
+-  , configTabWidth     :: Int            -- ^ tab stop width for source rendering (>= 1)
+-  , configContextLines :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
+-  , configTarget       :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
++  { configColorMode     :: ColorMode
++  , configUnicodeMode   :: UnicodeMode
++  , configHyperlinkMode :: HyperlinkMode
++  , configRelatedDepth  :: Natural
++  , configPalette       :: NonEmpty AnsiStyle
++  , configTabWidth      :: Int            -- ^ tab stop width for source rendering (>= 1)
++  , configContextLines  :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
++  , configTarget        :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
+   }
+   deriving (Eq, Show)
+ 
+@@ -71,17 +81,24 @@ defaultPalette :: NonEmpty AnsiStyle
+ defaultPalette =
+   color Red :| [color Green, color Yellow, color Blue, color Magenta, color Cyan]
+ 
+--- | Sensible defaults: auto colour, auto Unicode, depth limit 8, the default
+--- palette, and no explicit target (auto).
++-- | Sensible defaults: auto colour, auto Unicode, hyperlinks off, depth limit
++-- 8, the default palette, and no explicit target (auto).
++--
++-- Hyperlinks default to 'HyperlinkNever' rather than 'HyperlinkAuto', unlike
++-- colour/Unicode: OSC 8 has no reliable capability query the way TTY-ness
++-- does, so a terminal that reports 'capIsTerminal' may still not render the
++-- escape as a link. Defaulting off keeps existing callers' output
++-- byte-for-byte unchanged until they opt in with 'withHyperlinkMode'.
+ defaultConfig :: Config
+ defaultConfig = Config
+-  { configColorMode    = ColorAuto
+-  , configUnicodeMode  = UnicodeAuto
+-  , configRelatedDepth = defaultRelatedDepth
+-  , configPalette      = defaultPalette
+-  , configTabWidth     = 4
+-  , configContextLines = Nothing
+-  , configTarget       = Nothing
++  { configColorMode     = ColorAuto
++  , configUnicodeMode   = UnicodeAuto
++  , configHyperlinkMode = HyperlinkNever
++  , configRelatedDepth  = defaultRelatedDepth
++  , configPalette       = defaultPalette
++  , configTabWidth      = 4
++  , configContextLines  = Nothing
++  , configTarget        = Nothing
+   }
+ 
+ withColorMode :: ColorMode -> Config -> Config
+@@ -90,6 +107,9 @@ withColorMode m c = c { configColorMode = m }
+ withUnicodeMode :: UnicodeMode -> Config -> Config
+ withUnicodeMode m c = c { configUnicodeMode = m }
+ 
++withHyperlinkMode :: HyperlinkMode -> Config -> Config
++withHyperlinkMode m c = c { configHyperlinkMode = m }
++
+ withRelatedDepthLimit :: Natural -> Config -> Config
+ withRelatedDepthLimit n c = c { configRelatedDepth = n }
+ 
+diff --git a/src/Tadka/Internal/Render.hs b/src/Tadka/Internal/Render.hs
+index fd1212e..45d97ca 100644
+--- a/src/Tadka/Internal/Render.hs
++++ b/src/Tadka/Internal/Render.hs
+@@ -35,7 +35,8 @@ import           Prettyprinter.Render.Text      (renderStrict)
+ import           Tadka.Internal.Ann             (Ann)
+ import           Tadka.Internal.Config
+                    (Config, Target (..), configColorMode, configPalette,
+-                    configContextLines, configRelatedDepth, configTabWidth, configTarget, configUnicodeMode)
++                    configContextLines, configHyperlinkMode, configRelatedDepth,
++                    configTabWidth, configTarget, configUnicodeMode)
+ import           Tadka.Internal.Diagnostic      (Diagnostic)
+ import           Tadka.Internal.Terminal        (detectTerminalCaps, resolveConfig)
+ import           Tadka.Internal.Renderer.Graphical
+@@ -73,12 +74,13 @@ selectRenderer cfg =
+     TGraphical ->
+       SomeRenderer . Graphical $
+         GraphicalOptions
+-          { goColorMode    = configColorMode cfg
+-          , goUnicodeMode  = configUnicodeMode cfg
+-          , goPalette      = configPalette cfg
+-          , goRelatedDepth = configRelatedDepth cfg
+-          , goTabWidth     = configTabWidth cfg
+-          , goContextLines = configContextLines cfg
++          { goColorMode     = configColorMode cfg
++          , goUnicodeMode   = configUnicodeMode cfg
++          , goHyperlinkMode = configHyperlinkMode cfg
++          , goPalette       = configPalette cfg
++          , goRelatedDepth  = configRelatedDepth cfg
++          , goTabWidth      = configTabWidth cfg
++          , goContextLines  = configContextLines cfg
+           }
+     TNarratable ->
+       SomeRenderer (Narratable (NarratableOptions (configRelatedDepth cfg)))
+diff --git a/src/Tadka/Internal/Renderer/Graphical.hs b/src/Tadka/Internal/Renderer/Graphical.hs
+index 7b09e45..9ebb70d 100644
+--- a/src/Tadka/Internal/Renderer/Graphical.hs
++++ b/src/Tadka/Internal/Renderer/Graphical.hs
+@@ -11,7 +11,9 @@
+ -- character is @^@ and the palette (see 'labelStyle') distinguishes labels via
+ -- ANSI at the terminal boundary. Column maths go through
+ -- "Tadka.Internal.Width", so combining marks, East-Asian-width, and emoji are
+--- accounted for.
++-- accounted for. The @= see:@ line's URL is wrapped in an OSC 8 hyperlink
++-- escape when 'HyperlinkMode' allows it (see 'hyperlink'), independently of
++-- colour.
+ --
+ -- No compatibility guarantee.
+ module Tadka.Internal.Renderer.Graphical
+@@ -37,7 +39,8 @@ import qualified Prettyprinter.Render.Terminal as Term
+ import           Prettyprinter.Render.Text     (renderStrict)
+ 
+ import           Tadka.Internal.Ann            (Ann)
+-import           Tadka.Internal.Config         (ColorMode (..), UnicodeMode (..))
++import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
++                                                UnicodeMode (..))
+ import           Tadka.Internal.Context        (Context (..), LabelKind (..),
+                                                 LabelState (..), Labeled (..))
+ import           Tadka.Internal.SourceCode     (SourceCode (..))
+@@ -51,19 +54,20 @@ import           Tadka.Internal.Span           (LineCol (..), ResolvedSpan, reso
+                                                 resolvedStart, spanLength)
+ import           Tadka.Internal.Types          (DiagnosticCode,
+                                                 Severity (..), SeverityLabels (..),
+-                                                severityLabels,
++                                                Url, severityLabels,
+                                                 unDiagnosticCode, unLength, unUrl)
+ import           Tadka.Internal.Width          (displayColumnAt, expandTabs)
+ 
+ -- | Resolved settings the graphical handler renders from (populated only by
+ -- @selectRenderer@).
+ data GraphicalOptions = GraphicalOptions
+-  { goColorMode    :: ColorMode
+-  , goUnicodeMode  :: UnicodeMode
+-  , goPalette      :: NonEmpty AnsiStyle
+-  , goRelatedDepth :: Natural
+-  , goTabWidth     :: Int
+-  , goContextLines :: Maybe Int
++  { goColorMode     :: ColorMode
++  , goUnicodeMode   :: UnicodeMode
++  , goHyperlinkMode :: HyperlinkMode
++  , goPalette       :: NonEmpty AnsiStyle
++  , goRelatedDepth  :: Natural
++  , goTabWidth      :: Int
++  , goContextLines  :: Maybe Int
+   }
+   deriving (Eq, Show)
+ 
+@@ -91,6 +95,41 @@ colorize ColorNever _ t = t
+ colorize _ style t =
+   Term.renderStrict (layoutPretty (LayoutOptions Unbounded) (annotate style (pretty t)))
+ 
++-- | Wrap already-displayed text in an OSC 8 terminal-hyperlink escape pointing
++-- at @url@, unless hyperlinks are off. Mirrors 'colorize': 'HyperlinkNever'
++-- returns the text untouched (so plain output — every existing golden fixture
++-- — carries no escape), any other mode wraps it.
++--
++-- Takes a 'Url', never raw 'Text', so only an already-validated value — one
++-- that has passed 'Tadka.Internal.Types.mkUrl''s absolute-URI check — can ever
++-- be interpolated into the escape. 'mkUrl' delegates to
++-- 'Network.URI.parseAbsoluteURI', whose RFC 3986 grammar has no production
++-- admitting a raw control character, so a 'Url''s text can never itself
++-- contain the ESC byte that starts (or forges) a terminal escape sequence:
++-- this wrap is injection-safe without any extra stripping here, by
++-- construction rather than by runtime check.
++hyperlink :: HyperlinkMode -> Url -> Text -> Text
++hyperlink HyperlinkNever _ label  = label
++hyperlink _              u label  = oscLinkStart u <> label <> oscLinkEnd
++
++-- | The OSC 8 "open link" escape for a URL: empty params, the URL, then the
++-- string terminator (see 'oscStringTerminator').
++oscLinkStart :: Url -> Text
++oscLinkStart u = "\ESC]8;;" <> unUrl u <> oscStringTerminator
++
++-- | The OSC 8 "close link" escape: the same shape with an empty URL, the
++-- terminal-side convention every OSC 8 implementation shares for ending the
++-- link that the most recent 'oscLinkStart' opened.
++oscLinkEnd :: Text
++oscLinkEnd = "\ESC]8;;" <> oscStringTerminator
++
++-- | The string terminator (@ST@, @ESC \\@) that ends an OSC escape sequence.
++-- Preferred over the historical BEL (@\\a@) terminator: it is the form every
++-- OSC-8-supporting terminal in current use (iTerm2, kitty, VTE-based
++-- terminals, Windows Terminal, …) already documents and accepts.
++oscStringTerminator :: Text
++oscStringTerminator = "\ESC\\"
++
+ -- | Header colour by severity (bold + a conventional hue).
+ severityStyle :: Severity -> AnsiStyle
+ severityStyle SevError   = color Red    <> bold
+@@ -150,7 +189,8 @@ renderRoot opts sd@(SomeDiagnostic e) =
+     eqIndent = T.replicate (gw + 1) " "
+     header   = headerLine (goColorMode opts) (severity e) (code e) (docToText (message e))
+     snip     = snippetLines glyphs (severity e) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
+-    trailer  = helpSeeLines gw (fmap docToText (help e)) (fmap unUrl (url e))
++    trailer  = helpSeeLines gw (fmap docToText (help e))
++                 (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
+                  ++ causeLines
+                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
+     causeLines = [ eqIndent <> "= caused by: " <> summaryOf glyphs c
+diff --git a/src/Tadka/Internal/Terminal.hs b/src/Tadka/Internal/Terminal.hs
+index f20a39a..991d8a0 100644
+--- a/src/Tadka/Internal/Terminal.hs
++++ b/src/Tadka/Internal/Terminal.hs
+@@ -1,8 +1,9 @@
+ -- | Terminal-capability detection and the pure resolution of @Auto@ render
+ -- modes into concrete ones (post-v1 hardening). Detection (the only IO here)
+--- gathers capabilities; 'resolveConfig' — pure and total — turns 'ColorAuto'
+--- and 'UnicodeAuto' into concrete modes, so 'Tadka.Internal.Render.selectRenderer'
+--- stays pure. Explicit modes are always passed through unchanged.
++-- gathers capabilities; 'resolveConfig' — pure and total — turns 'ColorAuto',
++-- 'UnicodeAuto', and 'HyperlinkAuto' into concrete modes, so
++-- 'Tadka.Internal.Render.selectRenderer' stays pure. Explicit modes are always
++-- passed through unchanged.
+ --
+ -- No compatibility guarantee.
+ module Tadka.Internal.Terminal
+@@ -10,6 +11,7 @@ module Tadka.Internal.Terminal
+   , detectTerminalCaps
+   , resolveColor
+   , resolveUnicode
++  , resolveHyperlink
+   , resolveConfig
+   ) where
+ 
+@@ -18,29 +20,44 @@ import qualified Data.Text           as T
+ import           System.Environment  (lookupEnv)
+ import           System.IO           (Handle, hIsTerminalDevice)
+ 
+-import           Tadka.Internal.Config (ColorMode (..), Config, UnicodeMode (..),
+-                                        configColorMode, configUnicodeMode,
+-                                        withColorMode, withUnicodeMode)
++import           Tadka.Internal.Config (ColorMode (..), Config, HyperlinkMode (..),
++                                        UnicodeMode (..), configColorMode,
++                                        configHyperlinkMode, configUnicodeMode,
++                                        withColorMode, withHyperlinkMode,
++                                        withUnicodeMode)
+ 
+ -- | Detected capabilities of an output destination and environment.
+ data TerminalCaps = TerminalCaps
+-  { capIsTerminal :: Bool   -- ^ the handle is an interactive terminal
+-  , capNoColor    :: Bool   -- ^ @NO_COLOR@ is present (any value)
+-  , capForceColor :: Bool   -- ^ @CLICOLOR_FORCE@ is present and not @"0"@
+-  , capUnicode    :: Bool   -- ^ the active locale looks UTF-8
++  { capIsTerminal      :: Bool   -- ^ the handle is an interactive terminal
++  , capNoColor         :: Bool   -- ^ @NO_COLOR@ is present (any value)
++  , capForceColor      :: Bool   -- ^ @CLICOLOR_FORCE@ is present and not @"0"@
++  , capUnicode         :: Bool   -- ^ the active locale looks UTF-8
++  , capNoHyperlink     :: Bool   -- ^ @NO_HYPERLINK@ is present (any value)
++  , capForceHyperlink  :: Bool   -- ^ @FORCE_HYPERLINK@ is present and not @"0"@
+   }
+   deriving (Eq, Show)
+ 
+ -- | Gather capabilities for a handle: TTY status, @NO_COLOR@\/@CLICOLOR_FORCE@,
+--- and a UTF-8 locale check (@LC_ALL@ > @LC_CTYPE@ > @LANG@, POSIX precedence).
++-- a UTF-8 locale check (@LC_ALL@ > @LC_CTYPE@ > @LANG@, POSIX precedence), and
++-- the hyperlink pair below.
++--
++-- @FORCE_HYPERLINK@ is the convention the @supports-hyperlinks@ package (used
++-- by Yarn and other JS CLIs) already established for forcing OSC 8 on.
++-- @NO_HYPERLINK@ has no equivalent cross-tool precedent the way @NO_COLOR@
++-- does; it is a tadka-local variable that simply mirrors @NO_COLOR@'s shape
++-- (any value disables) for consistency and so a future shared convention could
++-- slot in without an API change.
+ detectTerminalCaps :: Handle -> IO TerminalCaps
+ detectTerminalCaps h = do
+-  term    <- hIsTerminalDevice h
+-  noColor <- isJust <$> lookupEnv "NO_COLOR"
+-  force   <- maybe False (/= "0") <$> lookupEnv "CLICOLOR_FORCE"
+-  uni     <- localeIsUtf8
++  term        <- hIsTerminalDevice h
++  noColor     <- isJust <$> lookupEnv "NO_COLOR"
++  force       <- maybe False (/= "0") <$> lookupEnv "CLICOLOR_FORCE"
++  uni         <- localeIsUtf8
++  noHyper     <- isJust <$> lookupEnv "NO_HYPERLINK"
++  forceHyper  <- maybe False (/= "0") <$> lookupEnv "FORCE_HYPERLINK"
+   pure TerminalCaps { capIsTerminal = term, capNoColor = noColor
+-                    , capForceColor = force, capUnicode = uni }
++                    , capForceColor = force, capUnicode = uni
++                    , capNoHyperlink = noHyper, capForceHyperlink = forceHyper }
+ 
+ localeIsUtf8 :: IO Bool
+ localeIsUtf8 = do
+@@ -68,9 +85,23 @@ resolveUnicode caps UnicodeAuto
+   | capUnicode caps = UnicodeAlways
+   | otherwise       = UnicodeAscii
+ 
+--- | Resolve both @Auto@ modes in a 'Config' to concrete modes.
++-- | Resolve a hyperlink mode against capabilities. Explicit modes pass
++-- through; @Auto@ obeys @NO_HYPERLINK@ (off), then @FORCE_HYPERLINK@ (on),
++-- then TTY status — the same three-tier shape as 'resolveColor', since both
++-- ultimately answer "can this destination usefully show a terminal escape?".
++resolveHyperlink :: TerminalCaps -> HyperlinkMode -> HyperlinkMode
++resolveHyperlink _    HyperlinkAlways = HyperlinkAlways
++resolveHyperlink _    HyperlinkNever  = HyperlinkNever
++resolveHyperlink caps HyperlinkAuto
++  | capNoHyperlink caps    = HyperlinkNever
++  | capForceHyperlink caps = HyperlinkAlways
++  | capIsTerminal caps     = HyperlinkAlways
++  | otherwise              = HyperlinkNever
++
++-- | Resolve all three @Auto@ modes in a 'Config' to concrete modes.
+ resolveConfig :: TerminalCaps -> Config -> Config
+ resolveConfig caps cfg =
+-    withUnicodeMode (resolveUnicode caps (configUnicodeMode cfg))
+-  . withColorMode   (resolveColor   caps (configColorMode   cfg))
++    withUnicodeMode   (resolveUnicode   caps (configUnicodeMode   cfg))
++  . withColorMode     (resolveColor     caps (configColorMode     cfg))
++  . withHyperlinkMode (resolveHyperlink caps (configHyperlinkMode cfg))
+   $ cfg
+diff --git a/tadka.cabal b/tadka.cabal
+index dab16f3..bf76b02 100644
+--- a/tadka.cabal
++++ b/tadka.cabal
+@@ -121,6 +121,7 @@ test-suite props
+                     Phase11
+                     Tabs
+                     TermColor
++                    Hyperlink
+                     Labels
+                     Cause
+                     Source
+diff --git a/test/golden/Fixtures.hs b/test/golden/Fixtures.hs
+index 4f9ff73..c10f041 100644
+--- a/test/golden/Fixtures.hs
++++ b/test/golden/Fixtures.hs
+@@ -9,6 +9,7 @@ module Fixtures
+   , jsonFixtures
+   , contextFixtures
+   , generatedSource
++  , single
+   ) where
+ 
+ import           Data.Text     (Text)
+diff --git a/test/golden/Main.hs b/test/golden/Main.hs
+index 47fc10f..e1a8044 100644
+--- a/test/golden/Main.hs
++++ b/test/golden/Main.hs
+@@ -26,7 +26,7 @@ import           System.Environment        (lookupEnv)
+ import           System.Exit               (exitFailure)
+ 
+ import           Fixtures                  (contextFixtures, fixtures, generatedSource, jsonFixtures,
+-                                            narratableFixtures)
++                                            narratableFixtures, single)
+ import           Tadka
+ 
+ cfg :: Config
+@@ -49,6 +49,17 @@ renderFix (SomeDiagnostic e) = case selectRenderer cfg of
+     renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
+   _ -> "<<not graphical>>"
+ 
++-- Same as 'cfg' but with hyperlinks turned on, to pin the OSC 8 escape bytes
++-- byte-for-byte (proves the wrap touches only the "= see:" line — everything
++-- else must match "single-label" exactly).
++hyperlinkCfg :: Config
++hyperlinkCfg = withHyperlinkMode HyperlinkAlways cfg
++
++renderHyperlink :: SomeDiagnostic -> Text
++renderHyperlink (SomeDiagnostic e) = case selectRenderer hyperlinkCfg of
++  SomeRenderer r@(Graphical _) -> renderStrict (layoutPretty (LayoutOptions Unbounded) (render r e))
++  _                            -> "<<not graphical>>"
++
+ -- Narratable fixtures render at a low depth limit so the truncation marker fires.
+ narrCfg :: Config
+ narrCfg = withRelatedDepthLimit 1 (withTarget TNarratable defaultConfig)
+@@ -107,6 +118,7 @@ allFixtures =
+   ++ [ (n, renderJs d)   | (n, d) <- jsonFixtures ]
+   ++ [ (n, renderCtx d) | (n, d) <- contextFixtures ]
+   ++ [ ("generated-parseerror", T.pack generatedSource) ]
++  ++ [ ("single-label-hyperlink", renderHyperlink (SomeDiagnostic single)) ]
+ 
+ fixturePath :: String -> FilePath
+ fixturePath name = "test/golden/fixtures/" <> name <> ".txt"
+diff --git a/test/golden/fixtures/single-label-hyperlink.txt b/test/golden/fixtures/single-label-hyperlink.txt
+new file mode 100644
+index 0000000..13b9b32
+--- /dev/null
++++ b/test/golden/fixtures/single-label-hyperlink.txt
+@@ -0,0 +1,8 @@
++error[tadka::E0001]: undefined variable `foo`
++  ┌─ example.hs:3:9
++  │
++3 │ let x = foo + 1
++  │         ^^^ not in scope
++  │
++  = help: did you mean `bar`?
++  = see: ]8;;https://example.org/errors/E0001\https://example.org/errors/E0001]8;;\
+\ No newline at end of file
+diff --git a/test/props/Hyperlink.hs b/test/props/Hyperlink.hs
+new file mode 100644
+index 0000000..284a86d
+--- /dev/null
++++ b/test/props/Hyperlink.hs
+@@ -0,0 +1,220 @@
++{-# LANGUAGE GADTs #-}
++{-# LANGUAGE OverloadedStrings #-}
++
++-- | OSC 8 hyperlinks (post-v1 hardening item 1). The resolver proofs pin
++-- exactly how 'HyperlinkAuto' becomes concrete, one-for-one with
++-- "TermColor"'s colour proofs; the render proofs pin that wrapping touches
++-- only the @= see:@ URL and nothing else — so a diagnostic with no URL is
++-- byte-identical whether hyperlinks are on or off, and 'HyperlinkNever'
++-- output is always the escape-free baseline regardless of what the message,
++-- help text, or URL contain.
++--
++-- Deliberately independent of "GenDiag"/"Fixtures": a small dedicated carrier
++-- and generator here keep this module's coverage from being perturbed by an
++-- unrelated change to generators several other suites also depend on.
++module Hyperlink (group) where
++
++import           Data.Text                  (Text)
++import qualified Data.Text                  as T
++import           Prettyprinter               (pretty)
++import           Prettyprinter.Render.Text  (renderStrict)
++import           Prettyprinter              (LayoutOptions (..), PageWidth (Unbounded),
++                                             layoutPretty)
++
++import           Hedgehog                   (Group (..), Gen, Property, forAll, property,
++                                             withTests, (===), assert)
++import qualified Hedgehog.Gen                as Gen
++import qualified Hedgehog.Range              as Range
++
++import           Tadka
++import           Tadka.Internal.Config       (configHyperlinkMode)
++import           Tadka.Internal.Terminal     (TerminalCaps (..), resolveConfig, resolveHyperlink)
++
++group :: Group
++group = Group "OSC 8 hyperlinks"
++  [ ("explicit hyperlink modes pass through",                prop_explicitPassthrough)
++  , ("auto hyperlink: NO_HYPERLINK always wins",             prop_noHyperlinkWins)
++  , ("auto hyperlink: force beats tty",                      prop_forceHyperlink)
++  , ("auto hyperlink: else follows tty",                     prop_ttyHyperlink)
++  , ("resolveConfig eliminates HyperlinkAuto",               prop_noAutoAfter)
++  , ("resolveConfig is idempotent on hyperlink mode",        prop_idempotentHyperlink)
++  , ("HyperlinkNever never emits an escape",                 prop_neverNoEsc)
++  , ("HyperlinkAlways wraps a present URL in OSC 8",         prop_alwaysWrapsUrl)
++  , ("no URL: Always and Never render identically",         prop_noUrlNoDifference)
++  , ("the wrap adds only the OSC 8 escape, nothing else",    prop_structureInvariant)
++  , ("unresolved Auto behaves like Always (mirrors colour)", prop_autoUnresolvedWraps)
++  , ("a raw ESC in the message is neutralised, not leaked",  prop_messageEscNeverLeaks)
++  ]
++
++-- === generators ============================================================
++
++genCaps :: Gen TerminalCaps
++genCaps = TerminalCaps <$> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool
++
++genHyperlinkMode :: Gen HyperlinkMode
++genHyperlinkMode = Gen.element [HyperlinkAuto, HyperlinkAlways, HyperlinkNever]
++
++-- A representative sample of the absolute URIs 'mkUrl' accepts: ordinary
++-- https, an IPv6 host, a non-http scheme, userinfo + port + path params,
++-- percent-encoding, a bare query string, and the shortest legal form (a
++-- scheme with an opaque, non-hierarchical part). Verified individually
++-- against 'mkUrl' while writing this module; kept as a fixed set (rather than
++-- a from-scratch URI generator) so every case here is independently known
++-- valid.
++genUrlText :: Gen Text
++genUrlText = Gen.element
++  [ "https://example.org/errors/E0001"
++  , "https://[::1]:8080/path"
++  , "mailto:foo@example.com"
++  , "a:b"
++  , "https://example.com/a%20b"
++  , "https://user:pass@host.example/path;p=1"
++  , "urn:isbn:0451450523"
++  , "https://example.com/x?y=1"
++  , "https://example.com:65535/"
++  , "file:///etc/passwd"
++  ]
++
++genUrl :: Gen Url
++genUrl = mkUrlOrErr <$> genUrlText
++  where mkUrlOrErr t = either (\e -> error ("Hyperlink.genUrl: " <> show e)) id (mkUrl t)
++
++-- ASCII plus a literal ESC, so properties can confirm the escape is
++-- neutralised by 'message''s existing control-character stripping rather than
++-- leaking into the rendered report.
++genMsgChar :: Gen Char
++genMsgChar = Gen.frequency
++  [ (8, Gen.filterT (/= '\n') (Gen.enum ' ' '~'))
++  , (1, pure '\ESC')
++  , (1, pure '\a')
++  ]
++
++genMsg :: Gen Text
++genMsg = Gen.text (Range.linear 0 20) genMsgChar
++
++-- | A minimal diagnostic carrier: only 'message' and (optionally) 'url' are
++-- ever non-default here, which is all these properties need.
++data HD = HD Text (Maybe Url)
++
++instance Diagnostic HD where
++  message (HD m _) = pretty m
++  url     (HD _ u) = u
++
++rightOrErr :: Show a => Either a b -> b
++rightOrErr = either (error . show) id
++
++renderGfx :: HyperlinkMode -> HD -> Text
++renderGfx hm d =
++  case selectRenderer (withColorMode ColorNever (withUnicodeMode UnicodeAlways
++                         (withHyperlinkMode hm (withTarget TGraphical defaultConfig)))) of
++    SomeRenderer r@(Graphical _) -> renderStrict (layoutPretty (LayoutOptions Unbounded) (render r d))
++    _                            -> ""
++
++esc :: Char
++esc = '\ESC'
++
++-- | Remove OSC 8 escapes (@ESC ]8;; <label> ESC \\@ / @ESC ]8;; ESC \\@),
++-- leaving whatever sits between the open and close escapes untouched. Total:
++-- a malformed/truncated tail (never produced by 'hyperlink', only reachable if
++-- a property here were given bad input) is left as-is rather than crashing.
++stripOsc8 :: Text -> Text
++stripOsc8 = T.pack . go . T.unpack
++  where
++    go [] = []
++    go (c : ']' : '8' : ';' : ';' : rest)
++      | c == esc = case break (== esc) rest of
++          (_, _ : '\\' : rest') -> go rest'
++          _                     -> rest
++    go (c : rest) = c : go rest
++
++-- === pure resolution proofs (mirrors "TermColor"'s colour proofs) =========
++
++prop_explicitPassthrough :: Property
++prop_explicitPassthrough = property $ do
++  caps <- forAll genCaps
++  resolveHyperlink caps HyperlinkAlways === HyperlinkAlways
++  resolveHyperlink caps HyperlinkNever  === HyperlinkNever
++
++prop_noHyperlinkWins :: Property
++prop_noHyperlinkWins = property $ do
++  caps <- forAll (fmap (\c -> c { capNoHyperlink = True }) genCaps)
++  resolveHyperlink caps HyperlinkAuto === HyperlinkNever
++
++prop_forceHyperlink :: Property
++prop_forceHyperlink = property $ do
++  caps <- forAll (fmap (\c -> c { capNoHyperlink = False, capForceHyperlink = True }) genCaps)
++  resolveHyperlink caps HyperlinkAuto === HyperlinkAlways
++
++prop_ttyHyperlink :: Property
++prop_ttyHyperlink = property $ do
++  caps0 <- forAll genCaps
++  let caps = caps0 { capNoHyperlink = False, capForceHyperlink = False }
++  resolveHyperlink caps HyperlinkAuto === (if capIsTerminal caps then HyperlinkAlways else HyperlinkNever)
++
++prop_noAutoAfter :: Property
++prop_noAutoAfter = property $ do
++  caps <- forAll genCaps
++  hm   <- forAll genHyperlinkMode
++  let r = resolveConfig caps (withHyperlinkMode hm defaultConfig)
++  assert (configHyperlinkMode r `elem` [HyperlinkAlways, HyperlinkNever])
++
++prop_idempotentHyperlink :: Property
++prop_idempotentHyperlink = property $ do
++  caps <- forAll genCaps
++  hm   <- forAll genHyperlinkMode
++  let c1 = resolveConfig caps (withHyperlinkMode hm defaultConfig)
++      c2 = resolveConfig caps c1
++  configHyperlinkMode c2 === configHyperlinkMode c1
++
++-- === render proofs ==========================================================
++
++prop_neverNoEsc :: Property
++prop_neverNoEsc = property $ do
++  msg <- forAll genMsg
++  mu  <- forAll (Gen.maybe genUrl)
++  assert (not (T.any (== esc) (renderGfx HyperlinkNever (HD msg mu))))
++
++prop_alwaysWrapsUrl :: Property
++prop_alwaysWrapsUrl = property $ do
++  msg <- forAll genMsg
++  u   <- forAll genUrl
++  let out    = renderGfx HyperlinkAlways (HD msg (Just u))
++      label  = unUrl u
++      wanted = "\ESC]8;;" <> label <> "\ESC\\" <> label <> "\ESC]8;;\ESC\\"
++  assert (T.isInfixOf wanted out)
++
++prop_noUrlNoDifference :: Property
++prop_noUrlNoDifference = property $ do
++  msg <- forAll genMsg
++  renderGfx HyperlinkAlways (HD msg Nothing) === renderGfx HyperlinkNever (HD msg Nothing)
++
++prop_structureInvariant :: Property
++prop_structureInvariant = property $ do
++  msg <- forAll genMsg
++  u   <- forAll genUrl
++  stripOsc8 (renderGfx HyperlinkAlways (HD msg (Just u))) === renderGfx HyperlinkNever (HD msg (Just u))
++
++-- 'hyperlink' (like 'colorize') treats any mode that is not the "off" mode as
++-- "on"; a raw, unresolved 'HyperlinkAuto' reaching the renderer therefore
++-- behaves exactly like 'HyperlinkAlways'. Pinned as a single deterministic
++-- case (not a property over generated input) because it documents a specific
++-- design choice rather than a general law.
++prop_autoUnresolvedWraps :: Property
++prop_autoUnresolvedWraps = withTests 1 . property $
++  let d = HD "type mismatch" (Just (rightOrErr (mkUrl "https://example.org/errors/E0001")))
++  in renderGfx HyperlinkAuto d === renderGfx HyperlinkAlways d
++
++-- A raw ESC embedded in the message text must never reach the rendered
++-- report: 'Tadka.Internal.Renderer.Graphical.docToText' already strips
++-- control characters from message/help/label text (unrelated to this
++-- feature), and this hyperlink work must not weaken that. Checked
++-- independently of 'prop_structureInvariant' (which proves the same thing via
++-- structural equality): here every ESC in the output is counted directly, so
++-- the proof holds even if the two OSC 8 escapes this feature adds were
++-- themselves malformed in a way structural comparison could miss.
++prop_messageEscNeverLeaks :: Property
++prop_messageEscNeverLeaks = property $ do
++  msg <- forAll genMsg
++  u   <- forAll genUrl
++  let out = renderGfx HyperlinkAlways (HD msg (Just u))
++  T.count (T.singleton esc) out === 4   -- introducer + terminator, for both the open and close escapes
+diff --git a/test/props/Main.hs b/test/props/Main.hs
+index b297a90..df56293 100644
+--- a/test/props/Main.hs
++++ b/test/props/Main.hs
+@@ -20,6 +20,7 @@ import qualified Phase9
+ import qualified Phase11
+ import qualified Tabs
+ import qualified TermColor
++import qualified Hyperlink
+ import qualified Labels
+ import qualified Cause
+ import qualified Source
+@@ -31,5 +32,5 @@ import qualified EdgeCases
+ main :: IO ()
+ main = do
+   setLocaleEncoding utf8   -- tadka emits Unicode; be locale-independent
+-  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Tabs.group, TermColor.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
++  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Tabs.group, TermColor.group, Hyperlink.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
+   unless (and results) exitFailure
+diff --git a/test/props/TermColor.hs b/test/props/TermColor.hs
+index 4a2779a..1c9a43a 100644
+--- a/test/props/TermColor.hs
++++ b/test/props/TermColor.hs
+@@ -46,7 +46,7 @@ group = Group "Terminal detection & colour"
+ -- === generators ===========================================================
+ 
+ genCaps :: Gen TerminalCaps
+-genCaps = TerminalCaps <$> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool
++genCaps = TerminalCaps <$> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool <*> Gen.bool
+ 
+ genColor :: Gen ColorMode
+ genColor = Gen.element [ColorAuto, ColorAlways, ColorNever]
