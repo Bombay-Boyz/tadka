@@ -26,17 +26,29 @@ data SrcSpanConvError
   | NegativeSpanLength        -- ^ end preceded start
   deriving (Eq, Show)
 
+-- | Total, safe indexing into a list: 'Nothing' out of bounds, never a partial
+-- crash. Kept local (mirrors 'Tadka.Internal.Width.atMay') so no caller in this
+-- module ever reaches for the partial @(!!)@ directly.
+atMayList :: [a] -> Int -> Maybe a
+atMayList xs i
+  | i < 0     = Nothing
+  | otherwise = case drop i xs of
+      (x : _) -> Just x
+      []      -> Nothing
+
 -- | Convert a 1-based (line, column) into a 0-based character offset within the
 -- given source, or 'Nothing' if the position is not in bounds. Column may point
--- one past the end of a line (the end-of-line position GHC uses).
+-- one past the end of a line (the end-of-line position GHC uses). Total: the
+-- line lookup is tied directly to the 'Maybe' via 'atMayList', so an
+-- out-of-range line can never reach the column check below it.
 offsetFromLineCol :: Text -> Int -> Int -> Maybe Int
-offsetFromLineCol src line col
-  | line < 1 || line > length ls = Nothing
-  | col  < 1 || col  > T.length here + 1 = Nothing
-  | otherwise = Just (before + (col - 1))
+offsetFromLineCol src line col = do
+  here <- atMayList ls (line - 1)
+  if col < 1 || col > T.length here + 1
+    then Nothing
+    else Just (before + (col - 1))
   where
     ls     = T.splitOn "\n" src
-    here   = ls !! (line - 1)
     before = sum (map ((+ 1) . T.length) (take (line - 1) ls))  -- +1 per newline
 
 -- | Convert a GHC 'SrcSpan' to a tadka 'Span', given the source text (needed to

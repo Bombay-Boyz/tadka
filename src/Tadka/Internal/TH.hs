@@ -66,7 +66,7 @@ deriveDiagnostic spec tyName = do
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specLabelFields") (specLabelFields spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specSecondaryLabelFields") (specSecondaryLabelFields spec)
   mapM_ (validateRelated fields) (specRelated spec)
-  mIdKind <- traverse (validateId fields) (specId spec)
+  idInfo <- traverse (\n -> (,) n <$> validateId fields n) (specId spec)
 
   -- Validate literal code/url at splice time.
   mapM_ (validateLiteral mkDiagnosticCode "specCode") (specCode spec)
@@ -83,7 +83,7 @@ deriveDiagnostic spec tyName = do
     , urlMethod (specUrl spec)
     , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
     , relatedMethod (specRelated spec)
-    , diagIdMethod (specId spec) mIdKind
+    , diagIdMethod idInfo
     ]
 
   inst <- instanceD (pure []) [t| Diagnostic $(conT tyName) |] (map pure methods)
@@ -207,13 +207,16 @@ relatedMethod (Just rn) = do
   e <- newName "e"
   Just <$> funD 'related [clause [varP e] (normalB [| $(varE rn) $(varE e) |]) []]
 
-diagIdMethod :: Maybe Name -> Maybe IdKind -> Q (Maybe Dec)
-diagIdMethod Nothing _ = pure Nothing
-diagIdMethod (Just idN) kind = do
+-- | The 'Name' and its validated 'IdKind' travel together as one value, so a
+-- field name can never reach this function without a kind decided for it (the
+-- two could previously desync as separately-computed 'Maybe's).
+diagIdMethod :: Maybe (Name, IdKind) -> Q (Maybe Dec)
+diagIdMethod Nothing = pure Nothing
+diagIdMethod (Just (idN, kind)) = do
   e <- newName "e"
   let body = case kind of
-        Just IdText -> [| Just (mkDiagnosticId ($(varE idN) $(varE e))) |]
-        _           -> [| Just ($(varE idN) $(varE e)) |]
+        IdText -> [| Just (mkDiagnosticId ($(varE idN) $(varE e))) |]
+        IdDiag -> [| Just ($(varE idN) $(varE e)) |]
   Just <$> funD 'diagnosticId [clause [varP e] (normalB body) []]
 
 strLit :: Text -> Q Exp

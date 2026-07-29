@@ -21,6 +21,7 @@ import qualified Data.Text         as T
 import qualified Data.Text.IO      as TIO
 import           Numeric           (readHex)
 import           System.Directory  (createDirectoryIfMissing, doesFileExist)
+import           System.Exit       (die)
 import           System.FilePath   ((</>))
 import           System.Process    (callProcess)
 
@@ -77,33 +78,40 @@ ensureCached (urlPath, name) = do
     putStrLn ("fetching " <> urlPath)
     callProcess "curl" ["-sSL", "--max-time", "60", "-o", dest, ucdBaseUrl <> "/" <> urlPath]
 
+-- | Read and parse a cached UCD file, or a descriptive failure. No partial
+-- function fires while parsing; a malformed line is reported by value and
+-- only turned into a process exit at the IO boundary in 'main'.
 readUcd :: FilePath -> IO [((Int, Int), Text)]
 readUcd name = do
   contents <- TIO.readFile (cacheDir </> name)
-  pure (concatMap parseLine (T.lines contents))
+  case concat <$> traverse parseLine (T.lines contents) of
+    Right ranges -> pure ranges
+    Left err     -> die ("gen-width-table: " <> name <> ": " <> err)
 
 -- | Parse one UCD data line into a code-point range and its property value.
--- Comments (@#@ onward) and blank lines yield no result.
-parseLine :: Text -> [((Int, Int), Text)]
+-- Comments (@#@ onward) and blank lines yield no result. Total: failure is
+-- reported via 'Left', never a crash.
+parseLine :: Text -> Either String [((Int, Int), Text)]
 parseLine raw =
   case T.strip (T.takeWhile (/= '#') raw) of
-    body | T.null body -> []
+    body | T.null body -> Right []
          | otherwise ->
              case map T.strip (T.splitOn ";" body) of
-               (codes : prop : _) -> [(parseCodes codes, prop)]
-               _                  -> []
+               (codes : prop : _) -> (\r -> [(r, prop)]) <$> parseCodes codes
+               _                  -> Right []
 
-parseCodes :: Text -> (Int, Int)
+parseCodes :: Text -> Either String (Int, Int)
 parseCodes t =
-  case map hex (T.splitOn ".." t) of
-    [x]    -> (x, x)
-    [a, b] -> (a, b)
-    _      -> error ("gen-width-table: malformed code range: " <> T.unpack t)
+  case traverse hex (T.splitOn ".." t) of
+    Right [x]    -> Right (x, x)
+    Right [a, b] -> Right (a, b)
+    Right _      -> Left ("malformed code range: " <> T.unpack t)
+    Left err     -> Left err
 
-hex :: Text -> Int
+hex :: Text -> Either String Int
 hex t = case readHex (T.unpack t) of
-  [(n, "")] -> n
-  _         -> error ("gen-width-table: bad hex: " <> T.unpack t)
+  [(n, "")] -> Right n
+  _         -> Left ("bad hex: " <> T.unpack t)
 
 -- | Sort and merge adjacent/overlapping ranges into a minimal ascending list.
 coalesce :: [(Int, Int)] -> [(Int, Int)]
