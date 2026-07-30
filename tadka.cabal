@@ -18,7 +18,7 @@ author:             the tadka authors
 maintainer:         tadka@example.org
 copyright:          (c) 2026 the tadka authors
 build-type:         Simple
-tested-with:        GHC ==9.4.7, GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
+tested-with:        GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
 extra-doc-files:    CHANGELOG.md
                     README.md
 
@@ -81,30 +81,28 @@ library
   -- `base` and `template-haskell` are the two bounds tied directly to GHC's
   -- own release cadence (each GHC major ships an exact base/TH pair), so
   -- their floors/ceilings below are chosen from that mapping, not guessed:
-  --   GHC 9.4.7  -> base-4.17.2.0, template-haskell-2.19
+  
   --   GHC 9.6.x  -> base-4.18.x,   template-haskell-2.20
   --   GHC 9.8.x  -> base-4.19.x,   template-haskell-2.21
   --   GHC 9.10.x -> base-4.20.x,   template-haskell-2.22
   --   GHC 9.12.x -> base-4.21.x,   template-haskell-2.23
   --   GHC 9.14.1 -> base-4.22.0.0, template-haskell-2.24
-  -- The previous pins (base <4.21, template-haskell <2.23) covered only
-  -- 9.6-9.10; they excluded 9.4.7 on the floor and 9.12/9.14 on the ceiling.
-  --
+  
   -- The remaining bounds (text/array/bytestring/containers/network-uri/
   -- prettyprinter*/ansi-terminal/aeson) are not GHC-version-locked the same
   -- way; the ranges below are a reasoned starting point, not a substitute for
   -- letting `cabal build` actually solve against each GHC version in CI and
   -- narrowing/widening from real solver failures.
-  build-depends:    base                          >=4.17   && <4.23
+  build-depends:    base                          >=4.18   && <4.23
                   , text                          >=2.0    && <2.3
                   , array                          >=0.5    && <0.6
                   , bytestring                     >=0.11   && <0.13
-                  , containers                     >=0.6    && <0.8
+                  , containers                     >=0.6    && <0.9
                   , network-uri                    >=2.6    && <2.7
                   , prettyprinter                  >=1.7    && <1.8
                   , prettyprinter-ansi-terminal    >=1.1    && <1.2
                   , ansi-terminal                  >=1.0    && <1.2
-                  , template-haskell               >=2.19   && <2.25
+                  , template-haskell               >=2.20   && <2.25
                   , aeson                          >=2.1    && <2.4
 
 -- Golden test suite: independently runnable (`cabal test golden`).
@@ -174,7 +172,7 @@ library interop-ghc
   -- accessors, which have been stable public GHC API since long before 9.4;
   -- no CPP has been needed for the range below, but that should be confirmed
   -- by an actual per-version build in CI, not assumed from the bound alone.
-  build-depends:    base, tadka, text, ghc >=9.4 && <9.15
+  build-depends:    base, tadka, text, ghc >=9.6 && <9.15
 
 library interop-megaparsec
   import:           warnings
