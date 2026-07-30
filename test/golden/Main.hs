@@ -110,6 +110,22 @@ prettyJSON = go 0
     isSimple _            = True
     pad n = T.replicate (2 * n) " "
 
+-- | Collapse GHC's base/ghc-internal module-qualification split so the
+-- 'generatedSource' fixture (the only one containing TH-'pprint'd references
+-- to base internals like @show@/@(.)@/@Just@) isn't tied to which GHC release
+-- produced it. Pre-split GHC (9.4-9.8-ish) qualifies these as @GHC.Base@,
+-- @GHC.Show@, @GHC.Maybe@; post-split GHC (9.10+) qualifies the same
+-- identifiers as @GHC.Internal.Base@, @GHC.Internal.Show@,
+-- @GHC.Internal.Maybe@ — and this is an ongoing, multi-release GHC-internal
+-- migration (further reshuffling is expected at GHC 10.0), not a one-off
+-- two-way difference. Collapsing @GHC.Internal.@ down to @GHC.@ normalizes
+-- every release's spelling to one canonical form, so this fixture checks what
+-- it's actually meant to check — that the derived method bodies are still
+-- direct calls to the same functions — without re-pinning to base's internal
+-- module layout every time GHC reorganizes it.
+normalizeGhcInternal :: Text -> Text
+normalizeGhcInternal = T.replace (T.pack "GHC.Internal.") (T.pack "GHC.")
+
 -- (name, rendered output) across all three handlers.
 allFixtures :: [(String, Text)]
 allFixtures =
@@ -117,7 +133,7 @@ allFixtures =
   ++ [ (n, renderNarr d) | (n, d) <- narratableFixtures ]
   ++ [ (n, renderJs d)   | (n, d) <- jsonFixtures ]
   ++ [ (n, renderCtx d) | (n, d) <- contextFixtures ]
-  ++ [ ("generated-parseerror", T.pack generatedSource) ]
+  ++ [ ("generated-parseerror", normalizeGhcInternal (T.pack generatedSource)) ]
   ++ [ ("single-label-hyperlink", renderHyperlink (SomeDiagnostic single)) ]
 
 fixturePath :: String -> FilePath
