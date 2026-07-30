@@ -24,6 +24,7 @@ check() {
 check WrongType "specSourceField"
 check NotAField "is not a field of the target type"
 check BadCode   "specCode: invalid literal"
+check WrongCollectionType "specLabelCollectionFields"
   check TwoSources "exactly one NamedSource field"
   check SuccessCriterion "specLabelFields"
 [ "$fail" -eq 0 ] && echo "check-compile-fail: OK" || { echo "check-compile-fail: FAILED"; exit 1; }
