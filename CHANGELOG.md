@@ -5,6 +5,33 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
 
 ## Unreleased — miette-parity hardening
 
+### Collection labels in `deriveDiagnostic`
+- New `specLabelCollectionFields`/`specSecondaryLabelCollectionFields` on
+  `DiagnosticSpec`: each names a `[Span]`-typed field (validated at splice
+  time, same as `specLabelFields`), and every element of that field's runtime
+  list becomes its own label sharing the given text — for a variable number of
+  same-kind occurrences (every prior declaration of a name, every match of a
+  banned pattern) known only when the diagnostic is built, where
+  `specLabelFields` needs one field per label fixed at splice time. Rendered
+  after all fixed-field labels, in field order then list order; an empty
+  runtime list simply contributes no labels.
+- TH-layer only, as intended: `buildContext`/`buildContextWith` are completely
+  unchanged, since they already accept a plain, arbitrary-length list — the
+  splice just expands a collection field into that same shape and appends it.
+  A spec with no collection fields generates byte-identical code to before
+  this feature existed (the expansion is only spliced in when at least one
+  collection field is actually declared), so no existing derived instance's
+  generated code changes shape.
+- New `WrongCollectionType` compile-fail case (a `Span`-typed, not
+  `[Span]`-typed, field must be rejected at the splice site) alongside the
+  existing ones in `tools/check-compile-fail.sh`. A new `LabelCollection`
+  property group proves a derived instance with collection fields renders
+  identically, across all three handlers, to a hand-written
+  `buildContext`/`buildContextWith` call expanding the same randomly generated
+  list — for varying list lengths (including empty and a 200-element
+  totality check), an all-primary-only collection, and a mixed
+  fixed-primary-plus-secondary-collection instance.
+
 ### Terminal hyperlinks: OSC 8 for the `= see:` URL
 - The graphical handler now wraps a diagnostic's `url` in an OSC 8 terminal
   hyperlink escape when `HyperlinkMode` allows it, so a supporting terminal

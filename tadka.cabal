@@ -122,6 +122,7 @@ test-suite props
                     Tabs
                     TermColor
                     Hyperlink
+                    LabelCollection
                     Labels
                     Cause
                     Source

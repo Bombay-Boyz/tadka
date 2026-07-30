@@ -39,6 +39,17 @@ data DiagnosticSpec = DiagnosticSpec
   , specSourceField :: Maybe Name         -- ^ must name a 'NamedSource'-typed field
   , specLabelFields :: [(Name, Text)]     -- ^ each 'Name' must name a 'Span'-typed field (primary)
   , specSecondaryLabelFields :: [(Name, Text)] -- ^ 'Span'-typed fields rendered as secondary labels
+  , specLabelCollectionFields :: [(Name, Text)]
+    -- ^ each 'Name' must name a @[Span]@-typed field; every element of that
+    -- field's runtime list becomes its own primary label, all sharing the
+    -- given text. For a variable number of same-kind occurrences (e.g. every
+    -- prior binding of a name) known only at runtime, where 'specLabelFields'
+    -- needs one field per label fixed at splice time. Rendered after all
+    -- 'specLabelFields' entries, in field order, then list order; an empty
+    -- runtime list simply contributes no labels.
+  , specSecondaryLabelCollectionFields :: [(Name, Text)]
+    -- ^ like 'specLabelCollectionFields', but each element is a secondary
+    -- label — the collection counterpart of 'specSecondaryLabelFields'.
   , specRelated     :: Maybe Name         -- ^ must name a @['SomeDiagnostic']@-typed field
   , specId          :: Maybe Name         -- ^ must name a 'Text'- or 'DiagnosticId'-typed field
   , specMessage     :: Maybe (Q Exp)      -- ^ an @e -> Doc Ann@ expression; else @pretty . show@
@@ -49,6 +60,7 @@ defaultSpec :: DiagnosticSpec
 defaultSpec = DiagnosticSpec
   { specCode = Nothing, specSeverity = SevError, specHelp = Nothing, specUrl = Nothing
   , specSourceField = Nothing, specLabelFields = [], specSecondaryLabelFields = []
+  , specLabelCollectionFields = [], specSecondaryLabelCollectionFields = []
   , specRelated = Nothing
   , specId = Nothing, specMessage = Nothing
   }
@@ -65,6 +77,10 @@ deriveDiagnostic spec tyName = do
   mapM_ (\n -> expectHead fields n [''NamedSource] "specSourceField") (specSourceField spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specLabelFields") (specLabelFields spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specSecondaryLabelFields") (specSecondaryLabelFields spec)
+  mapM_ (\(n, _) -> expectListHead fields n [''Span, ''SpanF] "specLabelCollectionFields")
+        (specLabelCollectionFields spec)
+  mapM_ (\(n, _) -> expectListHead fields n [''Span, ''SpanF] "specSecondaryLabelCollectionFields")
+        (specSecondaryLabelCollectionFields spec)
   mapM_ (validateRelated fields) (specRelated spec)
   idInfo <- traverse (\n -> (,) n <$> validateId fields n) (specId spec)
 
@@ -82,6 +98,7 @@ deriveDiagnostic spec tyName = do
     , helpMethod (specHelp spec)
     , urlMethod (specUrl spec)
     , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
+                    (specLabelCollectionFields spec) (specSecondaryLabelCollectionFields spec)
     , relatedMethod (specRelated spec)
     , diagIdMethod idInfo
     ]
@@ -123,6 +140,18 @@ expectHead fields n allowed ctx = do
     Just h | h `elem` allowed -> pure ()
     _ -> fail (ctx ++ ": field " ++ nameBase n ++ " has type " ++ pprint ty
                  ++ ", but must be one of " ++ show (map nameBase allowed))
+
+-- | Like 'expectHead', but for a @specLabelCollectionFields@/
+-- @specSecondaryLabelCollectionFields@ entry: the field must be a /list/ of
+-- one of the allowed heads (@[Span]@, not @Span@).
+expectListHead :: [(Name, Type)] -> Name -> [Name] -> String -> Q ()
+expectListHead fields n allowed ctx = do
+  ty <- fieldType fields n
+  case ty of
+    AppT ListT inner
+      | Just h <- headName inner, h `elem` allowed -> pure ()
+    _ -> fail (ctx ++ ": field " ++ nameBase n ++ " has type " ++ pprint ty
+                 ++ ", but must be a list of one of " ++ show (map nameBase allowed))
 
 validateRelated :: [(Name, Type)] -> Name -> Q ()
 validateRelated fields n = do
@@ -185,20 +214,45 @@ urlMethod Nothing  = pure Nothing
 urlMethod (Just t) = Just <$>
   funD 'url [clause [wildP] (normalB [| Just (unsafeUrl (pack $(strLit t))) |]) []]
 
-contextMethod :: Maybe Name -> [(Name, Text)] -> [(Name, Text)] -> Q (Maybe Dec)
-contextMethod Nothing _ _ = pure Nothing
-contextMethod (Just srcN) primFields secFields = do
+contextMethod :: Maybe Name -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)] -> Q (Maybe Dec)
+contextMethod Nothing _ _ _ _ = pure Nothing
+contextMethod (Just srcN) primFields secFields primColl secColl = do
   e <- newName "e"
-  -- Body is a single direct call to a shared function: buildContext when all
-  -- labels are primary (matching the vision), buildContextWith otherwise.
-  body <- if null secFields
+  -- Body is a single direct call to a shared function: buildContext when every
+  -- label (fixed-field or collection) is primary, buildContextWith otherwise.
+  -- A collection field's list is expanded to one tuple per element, at the
+  -- same shape buildContext/buildContextWith already accept, then `concat`ed
+  -- in after the fixed-field tuples — buildContext/buildContextWith need no
+  -- change at all to accept however many that expansion produces at runtime,
+  -- including zero.
+  --
+  -- `null primColl`/`null secColl` are decided here at splice time (these are
+  -- plain lists in the 'DiagnosticSpec' value, not runtime record fields), so
+  -- a spec with no collection fields generates the exact same code this
+  -- function produced before collection labels existed — not merely
+  -- equivalent code with a harmless no-op tail appended.
+  body <- if null secFields && null secColl
             then do
-              let tup (lf, txt) = [| ($(varE lf) $(varE e), Just (pretty (pack $(strLit txt)))) |]
-              [| buildContext ($(varE srcN) $(varE e)) $(listE (map tup primFields)) |]
+              let single (lf, txt) = [| ($(varE lf) $(varE e), Just (pretty (pack $(strLit txt)))) |]
+                  fixedList        = listE (map single primFields)
+              if null primColl
+                then [| buildContext ($(varE srcN) $(varE e)) $(fixedList) |]
+                else do
+                  let coll (lf, txt) = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                  [| buildContext ($(varE srcN) $(varE e))
+                       ($(fixedList) ++ concat $(listE (map coll primColl))) |]
             else do
-              let tup k (lf, txt) = [| ($(varE lf) $(varE e), $(k), Just (pretty (pack $(strLit txt)))) |]
-                  entries = map (tup [| Primary |]) primFields ++ map (tup [| Secondary |]) secFields
-              [| buildContextWith ($(varE srcN) $(varE e)) $(listE entries) |]
+              let single k (lf, txt) = [| ($(varE lf) $(varE e), $(k), Just (pretty (pack $(strLit txt)))) |]
+                  fixedEntries       = listE (map (single [| Primary |]) primFields
+                                            ++ map (single [| Secondary |]) secFields)
+              if null primColl && null secColl
+                then [| buildContextWith ($(varE srcN) $(varE e)) $(fixedEntries) |]
+                else do
+                  let coll k (lf, txt) = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                      collEntries      = listE (map (coll [| Primary |]) primColl
+                                              ++ map (coll [| Secondary |]) secColl)
+                  [| buildContextWith ($(varE srcN) $(varE e))
+                       ($(fixedEntries) ++ concat $(collEntries)) |]
   Just <$> funD 'context [clause [varP e] (normalB (pure body)) []]
 
 relatedMethod :: Maybe Name -> Q (Maybe Dec)
