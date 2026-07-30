@@ -3,7 +3,11 @@
 -- | One-directional adapter: GHC 'SrcSpan' → tadka 'Span' (spec Phase 10).
 --
 -- A plain function against Phase 1/2 types; no core module depends on this.
--- Minimum supported: the @ghc@ library shipped with GHC 9.10.
+-- Targets GHC 9.4.7 through 9.14.1 (see the @ghc@ bound in @tadka.cabal@).
+-- Only 'GHC.Types.SrcLoc''s 'SrcSpan'/'RealSrcSpan' accessors are used, which
+-- have been stable public GHC API across that whole range — no CPP needed,
+-- but this should be reconfirmed by an actual per-version CI build rather
+-- than assumed from this note.
 --
 -- No compatibility guarantee.
 module Tadka.Interop.GHC
