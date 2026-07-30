@@ -8,7 +8,7 @@ pluggable renderers (graphical / narratable / JSON), error codes with doc links,
 related-error chains, labeled multi-span source snippets, and derive-macro
 ergonomics.
 
-Design: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`.
+Design: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`
 
 ## Status
 
