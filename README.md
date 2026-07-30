@@ -105,4 +105,4 @@ make check-compile-fail    # assert each bad deriveDiagnostic use fails to compi
 ```
 
 Design notes: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`.
-Haskell principles the codebase follows: `principles.md`.
+Haskell principles the codebase follows: `principles.md`
