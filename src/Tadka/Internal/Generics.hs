@@ -78,7 +78,9 @@ instance (Selector s, Typeable c) => GCollect (M1 S s (K1 R c)) where
       Just (src :: NamedSource) -> ([src], [])
       Nothing -> case cast v of
         Just (sp :: Span) -> ([], [(T.pack (selName m), sp)])
-        Nothing           -> ([], [])
+        Nothing -> case cast v of
+          Just (sps :: [Span]) -> ([], [ (T.pack (selName m), sp) | sp <- sps ])
+          Nothing               -> ([], [])
 
 instance GCollect U1 where gcollect _ = ([], [])
 instance GCollect V1 where gcollect _ = ([], [])
@@ -87,10 +89,14 @@ instance GCollect V1 where gcollect _ = ([], [])
 
 type OneSourceManySpans e =
   ( CheckSource (CountField NamedSource (Rep e))
-  , CheckSpans  (CountField Span        (Rep e))
+  , CheckSpans  (CountSpanFields (Rep e))
   )
 
--- Count record fields of a given type in a generic representation.
+-- Count record fields of a given type in a generic representation. Stays an
+-- *exact*-type counter (used only for the NamedSource check): a [Span] field
+-- must not accidentally satisfy a Span count, which is exactly the silent-drop
+-- bug this fix removes — hence 'CountSpanFields' below is a separate family
+-- rather than an overload of this one.
 type family CountField (t :: Type) (f :: Type -> Type) :: Nat where
   CountField t (M1 D d f)          = CountField t f
   CountField t (M1 C c f)          = CountField t f
@@ -99,6 +105,21 @@ type family CountField (t :: Type) (f :: Type -> Type) :: Nat where
   CountField t (M1 S s (K1 R c))   = 0
   CountField t U1                  = 0
   CountField t V1                  = 0
+
+-- Count fields that 'gcollect' can turn into span labels: a scalar 'Span' or
+-- a '[Span]' field, either one counting as one "this record has spans"
+-- field. A record's only span-bearing field may legitimately be a '[Span]'
+-- with no scalar 'Span' field at all (e.g. @E { src :: NamedSource, spans ::
+-- [Span] }@), which 'gcollect' handles just fine.
+type family CountSpanFields (f :: Type -> Type) :: Nat where
+  CountSpanFields (M1 D d f)             = CountSpanFields f
+  CountSpanFields (M1 C c f)             = CountSpanFields f
+  CountSpanFields (a :*: b)              = CountSpanFields a + CountSpanFields b
+  CountSpanFields (M1 S s (K1 R Span))   = 1
+  CountSpanFields (M1 S s (K1 R [Span])) = 1
+  CountSpanFields (M1 S s (K1 R c))      = 0
+  CountSpanFields U1                     = 0
+  CountSpanFields V1                     = 0
 
 type family CheckSource (n :: Nat) :: Constraint where
   CheckSource 1 = ()

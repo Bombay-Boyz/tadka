@@ -5,6 +5,33 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
 
 ## Unreleased — miette-parity hardening
 
+### Issue remediation pass
+- **Breaking:** `StaleReason` loses its `SourceMismatch` constructor.
+  `resolveSpan` never produced it — the only real producer path is
+  out-of-bounds resolution — so it was a representable-but-unreachable state.
+  Removing it also tightens `Narratable.hs`'s `staleSentence`, which handled
+  it, to a total single-clause match that will now fail to compile (instead
+  of silently matching a wildcard) if a future `StaleReason` constructor is
+  ever added without updating every renderer.
+- Fixed: multiple same-kind labels (e.g. two `Secondary` labels on one line)
+  were visually indistinguishable under `ColorNever`, since `caretGlyph` only
+  looked at `LabelKind`, not position. The underline glyph is now chosen by a
+  per-kind rank: the first label of a kind keeps its existing anchor (`^` for
+  `Primary`, `-` for `Secondary`), and a second-or-later same-kind label
+  cycles through `~` (then `=`). Colour-mode output is unaffected — the glyph
+  is always `^` there, exactly as before.
+- Fixed: the graphical handler previously discarded `Ann` annotations
+  (`AnnCode`, `AnnKeyword`, `AnnFilename`, `AnnEmphasis`) on message/label/help
+  text, rendering plain, unstyled text regardless of author intent. It now
+  interprets them at its own render boundary — ANSI styling under any colour
+  mode, a plain-text fallback marker (backtick/quote) under `ColorNever` — the
+  same way `Narratable.hs`'s `toProseMarker` already did for prose output.
+- Fixed: `deriveDiagnostic` had no way to generate `diagnosticCause`. New
+  `specCause` field on `DiagnosticSpec` names a `Maybe SomeDiagnostic`-typed
+  field (validated at splice time, same discipline as `specRelated`); the
+  generated method body is a bare field accessor. New `WrongCauseType`
+  compile-fail case.
+
 ### Collection labels in `deriveDiagnostic`
 - New `specLabelCollectionFields`/`specSecondaryLabelCollectionFields` on
   `DiagnosticSpec`: each names a `[Span]`-typed field (validated at splice

@@ -30,6 +30,7 @@ group :: Group
 group = Group "Phase 5 - graphical handler"
   [ ("caret layout is non-negative and width-aware", prop_caretLayout)
   , ("caret glyph distinguishes primary/secondary",  prop_caretGlyph)
+  , ("caret glyph cycles by per-kind rank",           prop_caretGlyphCyclesByRank)
   , ("label palette cycles as (i mod p)",             prop_paletteCycling)
   , ("graphical render is total (fuelled diagnostics)", prop_totality)
   , ("graphical render is total (pathological cycles)", prop_totalityCycles)
@@ -57,8 +58,21 @@ prop_caretLayout = property $ do
 
 prop_caretGlyph :: Property
 prop_caretGlyph = withTests 1 . property $ do
-  caretGlyph Primary   === '^'
-  caretGlyph Secondary === '-'
+  caretGlyph ColorNever Primary   0 === '^'
+  caretGlyph ColorNever Primary   1 === '~'
+  caretGlyph ColorNever Secondary 0 === '-'
+  caretGlyph ColorNever Secondary 1 === '~'
+  caretGlyph ColorAlways Primary   5 === '^'
+  caretGlyph ColorAlways Secondary 5 === '^'
+
+-- | Rank cycles through a 3-character alphabet ('^'\/'-'  then '~' then '=')
+-- for each kind under 'ColorNever'; any colour mode is always '^' regardless
+-- of rank.
+prop_caretGlyphCyclesByRank :: Property
+prop_caretGlyphCyclesByRank = property $ do
+  k <- forAll (Gen.element [Primary, Secondary])
+  r <- forAll (Gen.int (Range.linear 0 20))
+  caretGlyph ColorNever k r === caretGlyph ColorNever k (r + 3)
 
 -- === palette cycling ======================================================
 

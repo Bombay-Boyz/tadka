@@ -51,6 +51,10 @@ data DiagnosticSpec = DiagnosticSpec
     -- ^ like 'specLabelCollectionFields', but each element is a secondary
     -- label — the collection counterpart of 'specSecondaryLabelFields'.
   , specRelated     :: Maybe Name         -- ^ must name a @['SomeDiagnostic']@-typed field
+  , specCause       :: Maybe Name         -- ^ must name a @Maybe SomeDiagnostic@-typed field
+                                          --   (diagnosticCause's own return type — an exact
+                                          --   match, so the generated method is a bare field
+                                          --   accessor, same discipline as specRelated/relatedMethod)
   , specId          :: Maybe Name         -- ^ must name a 'Text'- or 'DiagnosticId'-typed field
   , specMessage     :: Maybe (Q Exp)      -- ^ an @e -> Doc Ann@ expression; else @pretty . show@
   }
@@ -61,7 +65,7 @@ defaultSpec = DiagnosticSpec
   { specCode = Nothing, specSeverity = SevError, specHelp = Nothing, specUrl = Nothing
   , specSourceField = Nothing, specLabelFields = [], specSecondaryLabelFields = []
   , specLabelCollectionFields = [], specSecondaryLabelCollectionFields = []
-  , specRelated = Nothing
+  , specRelated = Nothing, specCause = Nothing
   , specId = Nothing, specMessage = Nothing
   }
 
@@ -82,6 +86,7 @@ deriveDiagnostic spec tyName = do
   mapM_ (\(n, _) -> expectListHead fields n [''Span, ''SpanF] "specSecondaryLabelCollectionFields")
         (specSecondaryLabelCollectionFields spec)
   mapM_ (validateRelated fields) (specRelated spec)
+  mapM_ (validateCause fields) (specCause spec)
   idInfo <- traverse (\n -> (,) n <$> validateId fields n) (specId spec)
 
   -- Validate literal code/url at splice time.
@@ -100,6 +105,7 @@ deriveDiagnostic spec tyName = do
     , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
                     (specLabelCollectionFields spec) (specSecondaryLabelCollectionFields spec)
     , relatedMethod (specRelated spec)
+    , causeMethod (specCause spec)
     , diagIdMethod idInfo
     ]
 
@@ -160,6 +166,18 @@ validateRelated fields n = do
     AppT ListT inner | headName inner == Just ''SomeDiagnostic -> pure ()
     _ -> fail ("specRelated: field " ++ nameBase n ++ " has type " ++ pprint ty
                  ++ ", but must be [SomeDiagnostic]")
+
+-- | Validate that a @specCause@ field is exactly @Maybe SomeDiagnostic@ —
+-- 'diagnosticCause''s own return type — so 'causeMethod''s body can be a bare
+-- accessor with no wrapping, preserving TH.hs's "every generated method body
+-- is an unmodified call" invariant.
+validateCause :: [(Name, Type)] -> Name -> Q ()
+validateCause fields n = do
+  ty <- fieldType fields n
+  case ty of
+    AppT (ConT m) inner | m == ''Maybe, headName inner == Just ''SomeDiagnostic -> pure ()
+    _ -> fail ("specCause: field " ++ nameBase n ++ " has type " ++ pprint ty
+                 ++ ", but must be Maybe SomeDiagnostic")
 
 validateId :: [(Name, Type)] -> Name -> Q IdKind
 validateId fields n = do
@@ -260,6 +278,12 @@ relatedMethod Nothing   = pure Nothing
 relatedMethod (Just rn) = do
   e <- newName "e"
   Just <$> funD 'related [clause [varP e] (normalB [| $(varE rn) $(varE e) |]) []]
+
+causeMethod :: Maybe Name -> Q (Maybe Dec)
+causeMethod Nothing   = pure Nothing
+causeMethod (Just cn) = do
+  e <- newName "e"
+  Just <$> funD 'diagnosticCause [clause [varP e] (normalB [| $(varE cn) $(varE e) |]) []]
 
 -- | The 'Name' and its validated 'IdKind' travel together as one value, so a
 -- field name can never reach this function without a kind decided for it (the

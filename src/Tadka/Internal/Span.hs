@@ -106,12 +106,15 @@ resolvedStart (ResolvedSpan _ _ s _) = s
 resolvedEnd :: ResolvedSpan -> LineCol
 resolvedEnd (ResolvedSpan _ _ _ e) = e
 
--- | Why a span failed to resolve. 'SourceMismatch' is part of the vocabulary
--- for callers that track source identity; 'resolveSpan' itself, working from
--- raw offsets, only ever reports out-of-bounds.
+-- | Why a span failed to resolve. 'resolveSpan', working from raw offsets,
+-- only ever reports out-of-bounds — 'StaleReason' has exactly one
+-- constructor because that is the only failure mode any producer in this
+-- library can construct today. (A previously-present 'SourceMismatch'
+-- constructor had no producer and was removed; see CHANGELOG.md. Real
+-- source-identity tracking, if ever added, is new scope for a future
+-- producer, not a reason to keep an unreachable constructor "just in case".)
 data StaleReason
   = SpanOutOfBounds
-  | SourceMismatch
   deriving (Eq, Show)
 
 -- | The concrete failure returned by 'resolveSpan'.
