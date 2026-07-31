@@ -26,7 +26,8 @@ module Tadka.Internal.Renderer.Graphical
   ) where
 
 import           Data.Char                     (isControl)
-import           Data.List.NonEmpty            (NonEmpty)
+import           Data.List                     (mapAccumL)
+import           Data.List.NonEmpty            (NonEmpty (..))
 import qualified Data.List.NonEmpty            as NE
 import           Data.Text                     (Text)
 import qualified Data.Text                     as T
@@ -36,9 +37,9 @@ import           Prettyprinter                 (Doc, LayoutOptions (..),
                                                 layoutPretty, pretty)
 import           Prettyprinter.Render.Terminal (AnsiStyle, Color (..), bold, color)
 import qualified Prettyprinter.Render.Terminal as Term
-import           Prettyprinter.Render.Text     (renderStrict)
+import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated, treeForm)
 
-import           Tadka.Internal.Ann            (Ann)
+import           Tadka.Internal.Ann            (Ann (..))
 import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
                                                 UnicodeMode (..))
 import           Tadka.Internal.Context        (Context (..), LabelKind (..),
@@ -136,12 +137,35 @@ severityStyle SevError   = color Red    <> bold
 severityStyle SevWarning = color Yellow <> bold
 severityStyle SevAdvice  = color Blue   <> bold
 
--- | The underline character for label index @i@. Under 'ColorNever' the three
--- characters cycle so labels stay distinguishable in plain text; otherwise a
--- single @^@ is used (colour distinguishes labels at the terminal).
-caretGlyph :: LabelKind -> Char
-caretGlyph Primary   = '^'
-caretGlyph Secondary = '-'
+-- | The underline character for a label of kind @k@, at rank @r@ among labels
+-- sharing that kind (0-based, in the diagnostic's original label order; see
+-- 'kindRank'). Under any colour mode the glyph is always @^@ — colour
+-- ('labelDisplayStyle' / 'severityStyle') is what distinguishes labels there.
+-- Under 'ColorNever', rank 0 keeps each kind's conventional anchor (@^@ for
+-- 'Primary', @-@ for 'Secondary', matching every existing golden fixture); a
+-- second or later label of the same kind cycles through @~@ (and, if a third
+-- ever appears, @=@) so it's never confused with its rank-0 sibling.
+caretGlyph :: ColorMode -> LabelKind -> Int -> Char
+caretGlyph ColorNever Primary   r = cyclePick ('^' :| "~=") r
+caretGlyph ColorNever Secondary r = cyclePick ('-' :| "~=") r
+caretGlyph _          _         _ = '^'
+
+-- | Total cycling by index, shared by 'caretGlyph' and 'labelStyle': drop-then
+-- -pattern-match rather than @(!!)@, so wraparound needs no partial indexing
+-- and the empty-list case is a documented unreachable, not a real branch.
+cyclePick :: NonEmpty a -> Int -> a
+cyclePick xs i =
+  case drop (i `mod` NE.length xs) (NE.toList xs) of
+    (x : _) -> x
+    []      -> NE.head xs  -- unreachable: 0 <= i `mod` n < n
+
+-- | 0-based rank of each label among labels sharing its 'LabelKind', in
+-- original document order — "how many earlier labels share this one's kind".
+kindRank :: [LabelKind] -> [Int]
+kindRank = snd . mapAccumL step (0, 0)
+  where
+    step (nP, nS) Primary   = ((nP + 1, nS), nP)
+    step (nP, nS) Secondary = ((nP, nS + 1), nS)
 
 -- | The ANSI style for a label: primary labels take the (bold) severity colour;
 -- secondary labels cycle the configured palette by index.
@@ -150,12 +174,10 @@ labelDisplayStyle sev _       Primary   _ = severityStyle sev
 labelDisplayStyle _   palette Secondary i = labelStyle palette i
 
 -- | The palette entry for label index @i@ (vision §7): entry @i `mod` p@ where
--- @p@ is the palette length. The single place this cycling formula lives.
+-- @p@ is the palette length. Shares 'cyclePick''s cycling logic with
+-- 'caretGlyph' — proven once, used twice.
 labelStyle :: NonEmpty AnsiStyle -> Int -> AnsiStyle
-labelStyle palette i =
-  case drop (i `mod` NE.length palette) (NE.toList palette) of
-    (s : _) -> s
-    []      -> NE.head palette   -- unreachable: 0 <= i `mod` n < n (NE.head is total)
+labelStyle = cyclePick
 
 -- | Given a source line, a 1-based start column, and a character length,
 -- compute @(displayColumnsBefore, caretWidth)@ using display widths. Both are
@@ -185,15 +207,16 @@ renderRoot opts sd@(SomeDiagnostic e) =
      header : snip ++ sep ++ trailer
   where
     glyphs   = glyphsFor (goUnicodeMode opts)
+    cmode    = goColorMode opts
     gw       = gutterWidth (context e)
     eqIndent = T.replicate (gw + 1) " "
-    header   = headerLine (goColorMode opts) (severity e) (code e) (docToText (message e))
-    snip     = snippetLines glyphs (severity e) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
-    trailer  = helpSeeLines gw (fmap docToText (help e))
+    header   = headerLine cmode (severity e) (code e) (docToStyledText cmode (message e))
+    snip     = snippetLines glyphs (severity e) cmode (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
+    trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
                  ++ causeLines
                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
-    causeLines = [ eqIndent <> "= caused by: " <> summaryOf glyphs c
+    causeLines = [ eqIndent <> "= caused by: " <> summaryOf cmode glyphs c
                  | c <- walkCauses (goRelatedDepth opts) sd ]
     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
 
@@ -223,7 +246,15 @@ snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
   [locationLine, railBlank] ++ body
   where
     indexed = zip [0 ..] (NE.toList labels)
-    oks   = [ (i, rs, k, docText txt) | (i, Labeled (LabelOk rs)   k txt) <- indexed ]
+    -- Per-kind rank (0-based, "how many earlier labels share this one's
+    -- kind"), computed once over the OK labels in original document order and
+    -- zipped alongside the global index @i@. @i@ still drives colour cycling
+    -- (labelDisplayStyle / mlSuffix, a separate and already-correct
+    -- mechanism); @rank@ drives only the ColorNever glyph (caretGlyph).
+    okLabelKinds = [ k | (_, Labeled (LabelOk _) k _) <- indexed ]
+    ranks        = kindRank okLabelKinds
+    oks   = [ (i, rs, k, rank, docToStyledText cmode <$> txt)
+            | ((i, Labeled (LabelOk rs) k txt), rank) <- zip indexed ranks ]
     stale = [ ()                      |     Labeled (LabelStale _) _ _   <- map snd indexed ]
 
     railIndent = T.replicate (gw + 1) " "
@@ -233,15 +264,15 @@ snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
     posText rs = scName src
                    <> ":" <> tshow (lcLine (resolvedStart rs))
                    <> ":" <> tshow (lcColumn (resolvedStart rs))
-    locRs = case [ rs | (_, rs, Primary, _) <- oks ] of
+    locRs = case [ rs | (_, rs, Primary, _, _) <- oks ] of
       (rs:_) -> Just rs
-      []     -> case oks of ((_, rs, _, _):_) -> Just rs; _ -> Nothing
+      []     -> case oks of ((_, rs, _, _, _):_) -> Just rs; _ -> Nothing
 
     -- Multi-line spans get connector lanes; single-line labels get carets.
     startLineOf rs = lcLine (resolvedStart rs)
     endLineOf   rs = lcLine (resolvedEnd rs)
     isMulti     rs = startLineOf rs < endLineOf rs
-    multis = [ (startLineOf rs, endLineOf rs, k, txt) | (_, rs, k, txt) <- oks, isMulti rs ]
+    multis = [ (startLineOf rs, endLineOf rs, k, txt) | (_, rs, k, _, txt) <- oks, isMulti rs ]
     laneAssign = assignLanes [ (s, e) | (s, e, _, _) <- multis ]
     nLanes = laneCount laneAssign
     laneInfo = zipWith (\(lane, iv) (_, _, k, txt) -> (lane, iv, k, txt)) laneAssign multis
@@ -268,8 +299,8 @@ snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
       | (lane, (_, e), k, mt) <- laneInfo, e == l, Just t <- [mt] ]
 
     body = okBlock ++ staleBlock
-    okBlock = case ([ startLineOf rs | (_, rs, _, _) <- oks ]
-                    ++ [ endLineOf rs | (_, rs, _, _) <- oks, isMulti rs ]) of
+    okBlock = case ([ startLineOf rs | (_, rs, _, _, _) <- oks ]
+                    ++ [ endLineOf rs | (_, rs, _, _, _) <- oks, isMulti rs ]) of
       []       -> []
       (s : ss) -> concatMap (renderEntry win) plan
         where plan   = planLines ctxLines (scLineCount src) (s : ss)
@@ -285,13 +316,13 @@ snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
         numbered = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " "
                      <> srcGutter l <> expandTabs tabW srcLine <> mlSuffix l
         caretsHere =
-          [ caretLine l i rs k txt srcLine
-          | (i, rs, k, txt) <- oks, not (isMulti rs), startLineOf rs == l ]
-    caretLine l i rs k txt srcLine =
+          [ caretLine l i rs k rank txt srcLine
+          | (i, rs, k, rank, txt) <- oks, not (isMulti rs), startLineOf rs == l ]
+    caretLine l i rs k rank txt srcLine =
       railIndent <> gRail glyphs <> " " <> caretGutter l
         <> T.replicate dispStart " "
         <> colorize cmode (labelDisplayStyle sev palette k i)
-             (T.replicate cw (T.singleton (caretGlyph k)) <> maybe "" (" " <>) txt)
+             (T.replicate cw (T.singleton (caretGlyph cmode k rank)) <> maybe "" (" " <>) txt)
       where
         (dispStart, cw) = caretLayout tabW srcLine (lcColumn (resolvedStart rs))
                                       (spanCharLen rs)
@@ -331,7 +362,7 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
   case term of
     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
     _ ->
-        (indent <> "= related: " <> summaryOf glyphs childDiag)
+        (indent <> "= related: " <> summaryOf (goColorMode opts) glyphs childDiag)
       : map (nest <>) (childSnippet ++ childSep ++ childRelated)
   where
     nest       = "  "
@@ -342,12 +373,12 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
     childSep     = [T.replicate (childGw + 1) " " <> gRail glyphs
                    | not (null childSnippet) && not (null childRelated)]
 
-summaryOf :: Glyphs -> SomeDiagnostic -> Text
-summaryOf glyphs (SomeDiagnostic e) =
+summaryOf :: ColorMode -> Glyphs -> SomeDiagnostic -> Text
+summaryOf cmode glyphs (SomeDiagnostic e) =
   case code e of
     Just c  -> unDiagnosticCode c <> " " <> gEmDash glyphs <> " " <> msg
     Nothing -> msg
-  where msg = docToText (message e)
+  where msg = docToStyledText cmode (message e)
 
 numRelated :: SomeDiagnostic -> Int
 numRelated (SomeDiagnostic e) = length (related e)
@@ -358,15 +389,40 @@ withDiag (SomeDiagnostic e) f = f e
 
 -- === Small helpers ========================================================
 
--- | Render a 'Doc' to a single line: embedded newlines (e.g. in a label or
--- message) are flattened to spaces so they can never break the caret/gutter
--- layout (mirrors miette's multi-line-label robustness fix, #318).
-docToText :: Doc ann -> Text
-docToText = T.map flat . renderStrict . layoutPretty (LayoutOptions Unbounded)
-  where flat c = if isControl c then ' ' else c   -- strip control chars: no terminal-escape injection
+-- | ANSI style for each semantic annotation, interpreted at the graphical
+-- handler's boundary (Ann.hs's own promised "toAnsiStyle in Phase 5").
+toAnsiStyle :: Ann -> AnsiStyle
+toAnsiStyle AnnCode     = Term.italicized
+toAnsiStyle AnnKeyword  = Term.bold
+toAnsiStyle AnnFilename = Term.underlined
+toAnsiStyle AnnEmphasis = Term.bold <> Term.italicized
 
-docText :: Maybe (Doc Ann) -> Maybe Text
-docText = fmap docToText
+-- | Plain-text fallback marker for an 'Ann' under 'ColorNever', so the
+-- information isn't lost in plain-text terminals either. Independent of
+-- "Tadka.Internal.Renderer.Narratable"'s @toProseMarker@: each renderer
+-- interprets 'Ann' at its own boundary, per Ann.hs's design comment.
+plainAnnMarker :: Ann -> Text
+plainAnnMarker AnnCode     = "`"
+plainAnnMarker AnnFilename = "\""
+plainAnnMarker AnnEmphasis = ""
+plainAnnMarker AnnKeyword  = ""
+
+-- | Render an annotated 'Doc' for the graphical handler to a single line
+-- (embedded newlines are flattened to spaces so they can never break the
+-- caret/gutter layout, mirroring miette's multi-line-label robustness fix,
+-- #318). Sanitizes each raw text leaf (newlines and other control chars ->
+-- space) BEFORE any annotation wrapping is applied, so a colour wrap's own
+-- ANSI bytes are never mistaken for content needing sanitization — the bug a
+-- naive "docToText but with a different renderer" fix would have
+-- reintroduced (see remediation notes, issue #1).
+docToStyledText :: ColorMode -> Doc Ann -> Text
+docToStyledText cmode =
+    renderSimplyDecorated sanitizeLeaf wrap . treeForm . layoutPretty (LayoutOptions Unbounded)
+  where
+    sanitizeLeaf = T.map (\c -> if c == '\n' || isControl c then ' ' else c)
+    wrap ann inner = case cmode of
+      ColorNever -> plainAnnMarker ann <> inner <> plainAnnMarker ann
+      _          -> colorize cmode (toAnsiStyle ann) inner
 
 -- | Replace control characters (except tab, handled by 'expandTabs') with a
 -- space, so attacker-controlled source can't inject terminal escape sequences.

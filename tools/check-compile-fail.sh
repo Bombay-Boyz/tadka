@@ -27,4 +27,5 @@ check BadCode   "specCode: invalid literal"
 check WrongCollectionType "specLabelCollectionFields"
   check TwoSources "exactly one NamedSource field"
   check SuccessCriterion "specLabelFields"
+  check WrongCauseType "specCause"
 [ "$fail" -eq 0 ] && echo "check-compile-fail: OK" || { echo "check-compile-fail: FAILED"; exit 1; }

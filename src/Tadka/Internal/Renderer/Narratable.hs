@@ -123,7 +123,6 @@ staleSentence reason txt =
     <> maybe "." (\t -> ", labeled: " <> docToProse t <> ".") txt
   where
     reasonText SpanOutOfBounds = "the span is out of bounds for the current source"
-    reasonText SourceMismatch  = "the source no longer matches at that position"
 
 -- === Help / URL ===========================================================
 

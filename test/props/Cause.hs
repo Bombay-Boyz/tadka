@@ -1,6 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Cause chain (post-v1 hardening): the "caused by" chain is depth- and
 -- cycle-safe exactly like @related@. A cause that loops back by 'diagnosticId'
@@ -25,13 +26,7 @@ import qualified Hedgehog.Gen               as Gen
 
 import           GenDiag                    (GD (..), selfCauseJust, selfCauseNothing)
 import           Tadka
-
-group :: Group
-group = Group "Cause chain"
-  [ ("cyclic cause chains render (every target)", prop_cyclicTerminates)
-  , ("id-cyclic cause marker renders at most once", prop_markerAtMostOnce)
-  , ("a cause chain renders a 'caused by' line",  prop_causedByAppears)
-  ]
+import           Tadka.Internal             (buildContext)
 
 renderT :: Diagnostic e => Target -> e -> Text
 renderT tgt e =
@@ -77,3 +72,48 @@ prop_causedByAppears :: Property
 prop_causedByAppears = withTests 1 . property $ do
   assert ("caused by" `T.isInfixOf` renderT TGraphical rooted)
   assert ("Caused by" `T.isInfixOf` renderT TNarratable rooted)
+
+-- === specCause: derive == manual ==========================================
+
+rightOrErr :: Show a => Either a b -> b
+rightOrErr = either (error . show) id
+
+srcC :: NamedSource
+srcC = rightOrErr (mkNamedSource "f.hs" "let a = bb")
+
+data DErr3 = DErr3 { d3src :: NamedSource, d3prim :: Span, d3cause :: Maybe SomeDiagnostic }
+
+deriveDiagnostic defaultSpec
+  { specSourceField = Just 'd3src, specLabelFields = [('d3prim, "here")]
+  , specCause = Just 'd3cause, specMessage = Just [| \_ -> "boom" |] }
+  ''DErr3
+
+data MErr3 = MErr3 { m3src :: NamedSource, m3prim :: Span, m3cause :: Maybe SomeDiagnostic }
+
+instance Diagnostic MErr3 where
+  message _ = "boom"
+  context e = buildContext (m3src e) [ (m3prim e, Just "here") ]
+  diagnosticCause e = m3cause e
+
+dCauseVal, dNoCauseVal :: DErr3
+dCauseVal   = DErr3 srcC (rightOrErr (mkSpan 4 1)) (Just (SomeDiagnostic leaf))
+dNoCauseVal = DErr3 srcC (rightOrErr (mkSpan 4 1)) Nothing
+
+mCauseVal, mNoCauseVal :: MErr3
+mCauseVal   = MErr3 srcC (rightOrErr (mkSpan 4 1)) (Just (SomeDiagnostic leaf))
+mNoCauseVal = MErr3 srcC (rightOrErr (mkSpan 4 1)) Nothing
+
+prop_deriveCauseEqualsManual :: Property
+prop_deriveCauseEqualsManual = withTests 1 . property $
+  mapM_ (\tgt -> do
+            renderT tgt dCauseVal   === renderT tgt mCauseVal
+            renderT tgt dNoCauseVal === renderT tgt mNoCauseVal)
+        [TGraphical, TNarratable, TJson]
+
+group :: Group
+group = Group "Cause chain"
+  [ ("cyclic cause chains render (every target)", prop_cyclicTerminates)
+  , ("id-cyclic cause marker renders at most once", prop_markerAtMostOnce)
+  , ("a cause chain renders a 'caused by' line",  prop_causedByAppears)
+  , ("derived specCause == manual diagnosticCause, all handlers", prop_deriveCauseEqualsManual)
+  ]

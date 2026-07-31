@@ -61,6 +61,26 @@ prop_glyphs = withTests 1 . property $ do
   assert (T.isInfixOf "-- context here" out)   -- secondary uses '-'
   assert (T.isInfixOf "^^ the error"   out)    -- primary uses '^'
 
+-- Two Secondary labels on the same line (both on line 1, "aaaa"): must be
+-- distinguishable under ColorNever even though they share a LabelKind.
+kindFix3 :: Context
+kindFix3 = buildContextWith src3
+  [ (rightOrErr (mkSpan 0 2), Secondary, Just "first")   -- "aa"
+  , (rightOrErr (mkSpan 2 2), Secondary, Just "second")  -- "aa"
+  ]
+
+data KindDiag3 = KindDiag3
+instance Diagnostic KindDiag3 where
+  message _ = "boom"
+  context _ = kindFix3
+
+prop_glyphsSameKindDistinct :: Property
+prop_glyphsSameKindDistinct = withTests 1 . property $ do
+  let out = gfx KindDiag3
+  -- rank 0 keeps the Secondary anchor '-', rank 1 cycles to '~'
+  assert (T.isInfixOf "-- first"  out)
+  assert (T.isInfixOf "~~ second" out)
+
 prop_jsonFlag :: Property
 prop_jsonFlag = withTests 1 . property $ do
   let labels = dtoLabels (toDTO (walkRelated 8 (SomeDiagnostic KindDiag)))
@@ -118,6 +138,7 @@ group = Group "Primary/secondary labels"
   [ ("graphical location anchors on the primary label", prop_anchorPrimary)
   , ("JSON marks primary vs secondary explicitly",      prop_jsonFlag)
   , ("graphical uses ^ for primary, - for secondary",   prop_glyphs)
+  , ("same-kind labels on one line get distinct glyphs", prop_glyphsSameKindDistinct)
   , ("derived (with secondary) == manual, all handlers",prop_deriveEqualsManual)
   ]
 
