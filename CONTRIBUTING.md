@@ -32,6 +32,23 @@ Follow `principles.docx`: total functions, explicit error handling (`Maybe` /
 unrepresentable via smart constructors and unexported constructors, IO at the
 edges, property-based tests alongside unit tests, warnings-as-errors.
 
+### Lint & format
+
+Install once: `cabal install hlint ormolu`.
+
+- `make lint` — runs `hlint` over `src/`, `test/`, `interop/`, `tools/` using
+  the repo's `.hlint.yaml`.
+- `make format` — runs `ormolu --mode inplace` over the same sources; run this
+  before committing.
+- `make format-check` — same, but only checks and never rewrites; this is what
+  CI runs.
+
+Both also run in CI (`lint-and-format` job) on every push and PR — a PR with
+unformatted code or a real hlint warning won't go green. If hlint's take on
+something conflicts with a deliberate style choice (see the export-list note
+in `.hlint.yaml` for a precedent), add a scoped ignore with a comment, not a
+blanket one.
+
 ## Review checklist — `deriveDiagnostic` discipline (vision §6)
 
 When changing `Tadka.Internal.TH` or the `Tadka.Internal` surface it calls:
