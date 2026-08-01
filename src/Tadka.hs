@@ -46,6 +46,15 @@ module Tadka
   , mkContext
   , mkContextDegrading
   , ContextError (..)
+    -- ** Multi-source context (Phase 12)
+    --
+    -- A 'Context' can hold labels resolved against more than one 'NamedSource'.
+    -- Single-source construction above is unchanged; these are the entry
+    -- points for a diagnostic whose labels span several files. The derive
+    -- macro and 'genericContext' remain single-source only in v1 — these are
+    -- hand-written-instance functions.
+  , mkContextMulti
+  , mkContextMultiDegrading
     -- * Rendering configuration
   , Config
   , defaultConfig

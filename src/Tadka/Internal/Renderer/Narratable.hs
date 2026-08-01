@@ -26,8 +26,9 @@ import           Prettyprinter                         (Doc, LayoutOptions (..),
 import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated, treeForm)
 
 import           Tadka.Internal.Ann                    (Ann (..))
-import           Tadka.Internal.Context                (Context (..), LabelKind (..),
-                                                        LabelState (..), Labeled (..))
+import           Tadka.Internal.Context                (Context, LabelKind (..),
+                                                        LabelState (..), Labeled (..),
+                                                        SourceGroup (..), contextSourceGroups)
 import           Tadka.Internal.SourceCode             (SourceCode (..))
 import           Tadka.Internal.Diagnostic             (Diagnostic (..), SomeDiagnostic (..))
 import           Tadka.Internal.Related                (RelatedTree (..),
@@ -84,9 +85,18 @@ headerSentence sev mcode msg = prefix <> " " <> codeClause <> msg <> "."
 
 -- === Context (location, source, labels) ===================================
 
+-- | One prose block per source group, in group order (Phase 12: a context can
+-- now span more than one source; each group gets its own \"Location: ...\"
+-- sentence anchored on that group's own first primary label, exactly as the
+-- single-group case always has). A one-group context — the only shape v1 ever
+-- produced before Phase 12 — yields exactly the same sentences, in the same
+-- order, as before: this is a strict generalisation of the prior behaviour,
+-- not a different rendering for the case that already worked.
 contextSentences :: Context -> [Text]
-contextSentences NoContext = []
-contextSentences (HasLabels src labels) = locationSentence ++ labelReadouts
+contextSentences = concatMap groupSentences . contextSourceGroups
+
+groupSentences :: SourceGroup -> [Text]
+groupSentences (SourceGroup src labels) = locationSentence ++ labelReadouts
   where
     indexed = NE.toList labels
     oks     = [ (k, rs) | Labeled (LabelOk rs) k _ <- indexed ]

@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               tadka
-version:            1.0.0.0
+version:            2.0.0.0
 synopsis:           Beautiful, structured, provably-correct diagnostic reports for Haskell.
 description:
   A diagnostic reporting framework for Haskell targeting feature parity with
@@ -135,6 +135,7 @@ test-suite props
                     Phase8
                     Phase9
                     Phase11
+                    Phase12
                     Tabs
                     TermColor
                     Hyperlink

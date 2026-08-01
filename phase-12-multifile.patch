@@ -1,0 +1,1131 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0f638e8..15bd360 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,58 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
+ 
+ ## Unreleased — miette-parity hardening
+ 
++### Multi-source diagnostics (Phase 12)
++- **Breaking:** `Tadka.Internal.Renderer.Json`'s `LabelDTO` gains a `file`
++  field, present on every label (`ldFile`/`"file"` in the serialized JSON),
++  including stale ones. Every existing JSON golden fixture with at least one
++  label changes shape (`json-single`, `json-cycle`, `json-truncated`);
++  `json-cause` is unaffected (its diagnostic has no context at all). This
++  closes a real, pre-existing gap independent of multi-source support: the
++  JSON DTO never named which file a label belonged to, even for a
++  single-source diagnostic.
++- `Context` now holds a non-empty, ORDERED sequence of source groups
++  (`SourceGroup`: one `NamedSource` plus its own non-empty, order-preserving
++  label list) instead of exactly one source. This is a strict generalisation:
++  a single-source `Context` is now the one-group case of the same
++  representation, not a different shape. Every existing guarantee —
++  label count/order preserved, `LabelStale` in place rather than dropped —
++  now holds pointwise, per group; group order itself is preserved too.
++- New construction API, mirroring the single-source functions one level up:
++  `mkContextMulti` (strict; `Left` on the first out-of-bounds span in
++  group-then-label order), `mkContextMultiDegrading` (total; degrades per
++  label within its own group), and `Tadka.Internal`'s `buildContextMulti`
++  (the multi-source convenience entry point, analogous to `buildContext`\/
++  `buildContextWith` — a source paired with no labels contributes no group,
++  mirroring `buildContext`'s empty-list convention per source). `mkContext`,
++  `mkContextDegrading`, `buildContext`, and `buildContextWith` are now
++  implemented as the one-group special case of their multi- counterparts —
++  not a second copy of the resolution logic — and are unchanged in signature
++  and behaviour (proven byte-identical: every existing graphical and
++  narratable golden fixture is unchanged).
++- All three renderers updated to walk every source group, in order:
++  - **Graphical** — one `┌─ file:line:col` gutter block per group, separated
++    by the same lone-rail-line convention `relatedChild` already uses between
++    a nested diagnostic's snippet and its related forest. The gutter width is
++    now the maximum needed across every group, so indentation (help/see/
++    related lines) stays aligned across a multi-file report. A one-group
++    context renders exactly the single block it always did, with no
++    separator.
++  - **Narratable** — one `Location: ...` sentence and its label readouts per
++    group, in group order.
++  - **JSON** — every label's DTO carries the name of its own group's source
++    via the new `file` field.
++- The derive macro (`deriveDiagnostic`) and `genericContext` remain
++  single-source only in v1; `buildContextMulti` is a hand-written-instance
++  entry point. Deferred, not forgotten — see `Tadka_Phase12_Spec.md` §6.
++- New `Phase12` property group (6 properties, 100 generated cases each):
++  `mkContextMulti`/`mkContextMultiDegrading`'s per-group and cross-group
++  count/order guarantees, the single-source functions' exact equivalence to
++  their one-group multi- counterparts, and `buildContextMulti`'s empty-group
++  handling. New `cross-file` / `narr-cross-file` / `json-cross-file` golden
++  fixtures, exercising a real two-file diagnostic through all three handlers.
++  Full existing suite (property + golden) re-verified with zero regressions
++  beyond the three JSON fixtures the `file` field intentionally changes.
++
+ ### Issue remediation pass
+ - **Breaking:** `StaleReason` loses its `SourceMismatch` constructor.
+   `resolveSpan` never produced it — the only real producer path is
+diff --git a/Tadka_Phase12_Spec.md b/Tadka_Phase12_Spec.md
+new file mode 100644
+index 0000000..b1e3bfb
+--- /dev/null
++++ b/Tadka_Phase12_Spec.md
+@@ -0,0 +1,234 @@
++# Tadka Phase 12 — Multi-Source Diagnostics
++
++Status: implemented, tested, not yet released. Targets the next version after
++`1.0.0.0` (bump required — see §5).
++
++## 1. Motivation
++
++Every `Context` before this phase held labels resolved against exactly one
++`NamedSource`. A diagnostic whose story genuinely spans two files — "this
++import in module A disagrees with the definition in module B" — had no way to
++show both locations in one report; the only source anchor available was
++whichever single file the author's `Context` happened to hold.
++
++This is a real capability gap, not a cosmetic one, and it is the one place
++this library's design was behind comparable Haskell diagnostic libraries
++(`Error.Diagnose` supports reports spanning multiple files). Closing it is
++additive: every existing single-source guarantee is preserved exactly, and a
++single-source `Context` is now the one-group special case of the
++generalised representation, not a different code path.
++
++## 2. Goals
++
++- A `Context` can hold labels anchored across more than one source, in a
++  caller-specified order.
++- Every guarantee a single-source `Context` already had — never drop a label,
++  never reorder labels, degrade a bad span to `LabelStale` in place rather
++  than discarding it — holds identically *per group*, plus a matching
++  guarantee on group order itself (groups are never dropped, reordered, or
++  merged).
++- All three renderers (graphical, narratable, JSON) present a multi-source
++  `Context` coherently: a real file/location per label, not just "the
++  labels," so a machine consumer (JSON) or a screen-reader user (narratable)
++  can tell which file each label belongs to as easily as a terminal user
++  reading the graphical gutters can.
++- Zero behavioural change for every existing single-source caller. Golden
++  fixtures prove this rather than asserting it: every pre-Phase-12 graphical
++  and narratable fixture is required to render byte-identical, unchanged.
++
++## 3. Explicit non-goals (no scope creep)
++
++These were considered and deliberately deferred, not overlooked:
++
++- **Message-type polymorphism** (the `Ann` vocabulary staying closed vs. an
++  open, caller-supplied message type, as in `Error.Diagnose`). This is a
++  separate, philosophically distinct decision — tightening vs. loosening the
++  "no renderer ever guesses how to interpret content" guarantee — and is
++  intentionally out of scope for this phase. If pursued at all, it is a v2,
++  opt-in escape hatch (an explicit `AnnCustom` case supplying all three
++  renderings up front), not a retroactive change to v1's closed vocabulary.
++  See the project's Phase-12-adjacent design discussion for the full
++  reasoning; nothing in this phase touches `Ann`.
++- **Derive-macro / generics multi-source support.** `deriveDiagnostic` and
++  `genericContext` remain single-source only (§6). `buildContextMulti` is a
++  hand-written-instance entry point in this phase.
++- **Cross-file connector semantics in the graphical renderer** (e.g., a
++  visual line connecting a label in file A to a label in file B). Each
++  group renders its own self-contained gutter block; blocks are not visually
++  linked to each other beyond sequential ordering and a separator rail. This
++  is a legitimate future enhancement, not a requirement this phase carries.
++
++## 4. Design
++
++### 4.1 `Context` representation
++
++```haskell
++data SourceGroup = SourceGroup
++  { sgSource :: NamedSource
++  , sgLabels :: NonEmpty (Labeled LabelState)
++  }
++
++data Context
++  = NoContext
++  | HasLabels (NonEmpty SourceGroup)
++```
++
++Previously `HasLabels` carried one `NamedSource` and one label list directly.
++`Context`'s public export (`Tadka.Context (NoContext)`) has always hidden the
++`HasLabels` constructor from the public API — only `NoContext` is
++pattern-matchable outside `Tadka.Internal.*` — so this representation change
++is invisible to any caller who only used the public smart constructors and
++`contextLabelStates`. It only affects the three renderer modules and
++`Tadka.Internal.Context` itself, all of which carry the "no compatibility
++guarantee" label already.
++
++`contextLabelStates` flattens across every group, in group order, exactly as
++before for the one-group case. A new `contextSourceGroups` is the renderers'
++shared way to walk a context group-by-group.
++
++### 4.2 Construction API
++
++```haskell
++mkContextMulti         :: NonEmpty (NamedSource, NonEmpty (Labeled Span)) -> Either ContextError Context
++mkContextMultiDegrading :: NonEmpty (NamedSource, NonEmpty (Labeled Span)) -> Context
++buildContextMulti       :: NonEmpty (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))]) -> Context
++```
++
++`mkContext`, `mkContextDegrading`, `buildContext`, and `buildContextWith` are
++now implemented as the one-group special case:
++
++```haskell
++mkContext src labels = mkContextMulti ((src, labels) :| [])
++mkContextDegrading src labels = mkContextMultiDegrading ((src, labels) :| [])
++```
++
++`buildContext`/`buildContextWith` needed no code changes at all — they only
++ever called `mkContextDegrading`, whose new implementation is transparent to
++them. This mirrors the project's existing discipline (`buildContext` as "a
++thin wrapper, not a second copy of the degrading logic") one level deeper:
++the single-source functions are now thin wrappers around the multi-source
++ones, not parallel implementations that could drift apart.
++
++`buildContextMulti` mirrors `buildContext`'s empty-list convention per
++source: a source paired with an empty entry list contributes no group at
++all (a source nobody labels shouldn't appear in the rendered output); the
++result is `NoContext` only if every group is empty.
++
++`ContextError` is unchanged (`newtype ContextError = ContextError SpanError`)
++— it still names only the first span that failed to resolve, now in
++group-then-label order, matching how the pre-Phase-12 single-source version
++named only the first failing span with no per-label index either.
++
++### 4.3 Renderers
++
++**Graphical** (`Tadka.Internal.Renderer.Graphical`): the pre-existing
++single-group snippet logic (location line, gutter, source lines, carets,
++connector lanes for multi-line spans) is untouched internally — extracted
++into `groupSnippetLines`, called once per source group, with the group
++blocks joined by the same lone-rail-line separator convention `relatedChild`
++already uses between a nested diagnostic's own snippet and its related
++forest. `gutterWidth` now takes the maximum line-number width needed across
++every group (not just one), so the shared indentation used by help/see/
++related lines stays visually aligned regardless of how many files are
++involved. A one-group `Context` produces exactly the single block and exact
++byte output it always did — proven by golden fixture, not merely asserted.
++
++**Narratable** (`Tadka.Internal.Renderer.Narratable`): `contextSentences` is
++now `concatMap groupSentences . contextSourceGroups` — one location sentence
++plus its label readouts per group, in group order. Same one-group-identical
++guarantee, same proof method.
++
++**JSON** (`Tadka.Internal.Renderer.Json`): `LabelDTO` gains a `file :: Text`
++field, populated from the label's own group's source name
++(`Tadka.sourceName`), present on stale labels too (a stale label still names
++the file its now-unresolvable span was meant for). This is the one
++renderer-level change that is *not* one-group-identical — seen next.
++
++## 5. Breaking change: JSON DTO gains `file`
++
++Adding `file` to `LabelDTO` changes the shape of every JSON diagnostic that
++has at least one label — independent of whether that diagnostic is
++single-source or multi-source. This is intentional and necessary: the
++pre-Phase-12 JSON output never named which file a label belonged to at all,
++which was already a real gap for a *single*-file diagnostic (a JSON consumer
++had no way to know the file without threading it through some other
++channel). Closing the multi-source gap made this omission impossible to
++leave in place, since a multi-file report absolutely needs it — so it is
++fixed for every diagnostic, not just multi-file ones.
++
++Affected golden fixtures: `json-single`, `json-cycle`, `json-truncated`
++(each gains `"file": "<name>"` on its one label, key-ordered right after
++`"labels"` opens, before `"line"`, matching `LabelDTO`'s own field order).
++`json-cause` is unaffected — its diagnostic (`CauseNode`) never sets a
++`context`, so it has no labels to begin with.
++
++**Action required before release:** bump `tadka`'s version past `1.0.0.0`
++(this is a DTO-breaking change for any consumer parsing the JSON target) —
++see `tadka.cabal`'s `version` field and the release-readiness discussion this
++phase followed from.
++
++## 6. Deferred: derive-macro and generics multi-source support
++
++`Tadka.Internal.TH`'s `deriveDiagnostic` and `Tadka.Internal.Generics`'
++`genericContext` are unchanged by this phase and remain single-source only:
++
++- `deriveDiagnostic`'s `DiagnosticSpec` still validates exactly one
++  `NamedSource`-typed field (`specSourceField`) at splice time.
++- `genericContext` still type-errors at compile time unless the record has
++  exactly one `NamedSource` field (`CheckSource (CountField NamedSource (Rep e))`).
++
++Neither module pattern-matches `HasLabels`/`SourceGroup` directly — both only
++ever call `buildContext`/`buildContextWith`, whose signatures and behaviour
++are unchanged — so this phase required zero edits to either module. Extending
++either to multi-source is a real, separate design question (what spec syntax
++names which label maps to which of several source fields?) left for a future
++phase once `buildContextMulti`'s hand-written usage has had a chance to
++surface what that mapping should actually look like in practice, rather than
++speculatively designing it now.
++
++## 7. Testing
++
++**Golden** (`test/golden/`): a new `crossFile` fixture (two sources —
++`ModuleA.hs` importing a name, `ModuleB.hs` defining it with a conflicting
++type — one label each, `Secondary` then `Primary`) is rendered through all
++three handlers as `cross-file`, `narr-cross-file`, `json-cross-file`. Every
++pre-existing fixture is re-verified unchanged except the three JSON ones
++`file` intentionally affects (§5) — this is checked by running the full
++existing golden suite against the new code before adding any new fixture,
++confirming the diff is exactly and only the JSON schema change, then adding
++the new fixture afterward.
++
++**Property** (`test/props/Phase12.hs`, 6 properties):
++
++1. `mkContextMulti` is `Left` iff any span, in any group, is out of bounds.
++2. `mkContextMultiDegrading` never changes any group's label count or order
++   (count preserved per group and in total; `LabelStale` appears in exactly
++   the positions whose span fails to resolve, attributed to the correct
++   group).
++3. `mkContext`/`mkContextDegrading` produce exactly the same
++   `contextLabelStates` as the one-group case of their multi- counterparts
++   (both the success and failure shape, for the strict constructor).
++4. `buildContextMulti` with every group's entry list empty produces
++   `NoContext`.
++5. `buildContextMulti` dispatches to `mkContextMultiDegrading` (same
++   resulting label states for the same input, reshaped).
++6. `buildContextMulti` drops an empty group without affecting the labels
++   contributed by the other groups.
++
++All 6 pass at 100 generated cases each (20 for the all-empty case, since its
++generator space is small). The full pre-existing property suite (every
++group from Phase 1 through the edge-case/security suites) was re-run after
++this phase's changes and passes with zero regressions.
++
++## 8. Migration notes (for whenever this ships)
++
++- Any JSON consumer that parses `LabelDTO`-shaped objects and rejects unknown
++  keys will need updating for the new `file` key.
++- Any code that pattern-matched `Tadka.Internal.Context.HasLabels` directly
++  (there is no compatibility guarantee for this — only `Tadka.hs`'s
++  `Context (NoContext)` export is public) needs updating for the new shape;
++  use `contextSourceGroups`/`contextLabelStates` instead of matching the
++  constructor.
++- Everyone else — anyone using only the public `Tadka` module's smart
++  constructors (`mkContext`, `buildContext` via a derived instance, etc.) —
++  needs no changes at all.
+diff --git a/src/Tadka.hs b/src/Tadka.hs
+index 9f6f584..2653428 100644
+--- a/src/Tadka.hs
++++ b/src/Tadka.hs
+@@ -46,6 +46,15 @@ module Tadka
+   , mkContext
+   , mkContextDegrading
+   , ContextError (..)
++    -- ** Multi-source context (Phase 12)
++    --
++    -- A 'Context' can hold labels resolved against more than one 'NamedSource'.
++    -- Single-source construction above is unchanged; these are the entry
++    -- points for a diagnostic whose labels span several files. The derive
++    -- macro and 'genericContext' remain single-source only in v1 — these are
++    -- hand-written-instance functions.
++  , mkContextMulti
++  , mkContextMultiDegrading
+     -- * Rendering configuration
+   , Config
+   , defaultConfig
+diff --git a/src/Tadka/Internal.hs b/src/Tadka/Internal.hs
+index 74fd997..6877a1e 100644
+--- a/src/Tadka/Internal.hs
++++ b/src/Tadka/Internal.hs
+@@ -18,8 +18,9 @@ module Tadka.Internal
+   , unsafeUrl
+   , buildContext
+   , buildContextWith
++  , buildContextMulti
+   , mkDiagnosticId
+   ) where
+ 
+-import Tadka.Internal.Context (buildContext, buildContextWith)
++import Tadka.Internal.Context (buildContext, buildContextMulti, buildContextWith)
+ import Tadka.Internal.Types   (mkDiagnosticId, unsafeDiagnosticCode, unsafeUrl)
+diff --git a/src/Tadka/Internal/Context.hs b/src/Tadka/Internal/Context.hs
+index f60de3e..805de49 100644
+--- a/src/Tadka/Internal/Context.hs
++++ b/src/Tadka/Internal/Context.hs
+@@ -1,4 +1,5 @@
+--- | Labels, label state, and 'Context' construction (vision §2, §6).
++-- | Labels, label state, and 'Context' construction (vision §2, §6; Phase 12
++-- extends this module to multiple sources per context).
+ --
+ -- The headline v5 guarantee lives here: a 'Context' holds only spans that were
+ -- already checked against real source text, and it /never silently forgets one/.
+@@ -7,10 +8,23 @@
+ -- label count and ordering of a rendered diagnostic never depend on which spans
+ -- happened to still be valid.
+ --
++-- Phase 12 generalises this to multiple sources: a 'Context' is now a
++-- non-empty, ORDERED sequence of 'SourceGroup's, each pairing one source with
++-- its own non-empty, order-preserving label list. Every guarantee above holds
++-- pointwise, per group: a group's label count/order is exactly its input's,
++-- and the group order is exactly the input order. Single-source construction
++-- ('mkContext', 'mkContextDegrading', 'buildContext', 'buildContextWith') is
++-- unchanged in signature and behaviour — each is now a one-group special case
++-- of the corresponding multi-source function ('mkContextMulti',
++-- 'mkContextMultiDegrading'), not a second copy of the resolution logic.
++--
+ -- @buildContext@ is the single, plain, independently-testable dispatch that
+ -- both the derive macro (Phase 8) and hand-written instances call; landing it
+ -- here (not in Phase 8) is what lets the macro stay "provably thin" — it only
+--- has to generate a call to this already-proven function.
++-- has to generate a call to this already-proven function. The derive macro
++-- and 'Tadka.Internal.Generics.genericContext' remain single-source only in
++-- v1 (Phase 12 spec §6): 'buildContextMulti' is a hand-written-instance entry
++-- point, not yet macro-generated.
+ --
+ -- No compatibility guarantee.
+ module Tadka.Internal.Context
+@@ -20,13 +34,18 @@ module Tadka.Internal.Context
+   , LabelState (..)
+     -- * Context
+   , Context (..)
++  , SourceGroup (..)
+   , contextLabelStates
++  , contextSourceGroups
+     -- * Construction
+   , ContextError (..)
+   , mkContext
+   , mkContextDegrading
++  , mkContextMulti
++  , mkContextMultiDegrading
+   , buildContext
+   , buildContextWith
++  , buildContextMulti
+   ) where
+ 
+ import           Data.List.NonEmpty (NonEmpty (..))
+@@ -44,7 +63,8 @@ import           Tadka.Internal.Types (NamedSource)
+ -- constructed context holds @Labeled LabelState@.
+ -- | Whether a label points at the error itself ('Primary') or at supporting
+ -- context ('Secondary'). Handlers emphasise primary labels and anchor the
+--- report location on the first primary one.
++-- report location on the first primary one (per group, since Phase 12: see
++-- each renderer's per-group anchoring).
+ data LabelKind = Primary | Secondary
+   deriving (Eq, Show, Enum, Bounded, Ord)
+ 
+@@ -65,52 +85,103 @@ data LabelState
+     -- original position, with no source line to show, rather than absent.
+   deriving (Eq, Show)
+ 
++-- | One source, together with the non-empty, order-preserving list of labels
++-- resolved (or degraded) against it. The unit Phase 12 adds to 'Context': a
++-- multi-source 'Context' is a non-empty, ordered sequence of these, exactly as
++-- a single-source 'Context' was previously one source and one label list.
++data SourceGroup = SourceGroup
++  { sgSource :: NamedSource
++  , sgLabels :: NonEmpty (Labeled LabelState)
++  }
++  deriving (Show)
++
+ -- | Either there is no source-anchored information at all ('NoContext'), or
+--- there is exactly one source and a non-empty, order-preserving list of labels
+--- checked against it ('HasLabels'). There is no third state and no
+--- "silently shorter" state.
++-- there is a non-empty, ORDERED sequence of 'SourceGroup's ('HasLabels').
++-- Pre-Phase-12 code that only ever built one group still sees exactly one
++-- element in that sequence — this is a strict generalisation, not a
++-- different shape for the single-source case. There is no third state and no
++-- "silently shorter" state, at either the group level or the label level
++-- within a group.
+ data Context
+   = NoContext
+-  | HasLabels NamedSource (NonEmpty (Labeled LabelState))
++  | HasLabels (NonEmpty SourceGroup)
+   deriving (Show)
+ 
+--- | The label states of a context in order (empty for 'NoContext'). Useful for
+--- asserting the count/ordering guarantee.
++-- | The label states of a context in order, flattened across every group in
++-- group order (empty for 'NoContext'). Useful for asserting the
++-- count/ordering guarantee.
+ contextLabelStates :: Context -> [LabelState]
+-contextLabelStates NoContext           = []
+-contextLabelStates (HasLabels _ lbls)  = fmap labelSpan (NE.toList lbls)
++contextLabelStates NoContext       = []
++contextLabelStates (HasLabels gs)  =
++  concatMap (fmap labelSpan . NE.toList . sgLabels) (NE.toList gs)
+ 
+--- | Why 'mkContext' (the strict constructor) rejected its input: the first
+--- span that failed to resolve.
++-- | The source groups of a context in order (empty for 'NoContext'). The
++-- renderers' one shared way to walk a context group-by-group.
++contextSourceGroups :: Context -> [SourceGroup]
++contextSourceGroups NoContext      = []
++contextSourceGroups (HasLabels gs) = NE.toList gs
++
++-- | Why 'mkContext'\/'mkContextMulti' (the strict constructors) rejected their
++-- input: the first span that failed to resolve, in group-then-label order.
+ newtype ContextError = ContextError SpanError
+   deriving (Eq, Show)
+ 
++-- | Strict, multi-source construction: succeeds only if /every/ span in
++-- /every/ group resolves against its own group's source. Returns 'Left' for
++-- the first out-of-bounds span encountered in group-then-label order.
++mkContextMulti
++  :: NonEmpty (NamedSource, NonEmpty (Labeled Span))
++  -> Either ContextError Context
++mkContextMulti groups = HasLabels <$> traverse resolveGroup groups
++  where
++    resolveGroup :: (NamedSource, NonEmpty (Labeled Span)) -> Either ContextError SourceGroup
++    resolveGroup (src, labels) =
++      case traverse (resolveLabel src) labels of
++        Left err   -> Left (ContextError err)
++        Right lbls -> Right (SourceGroup src lbls)
++
++    resolveLabel :: NamedSource -> Labeled Span -> Either SpanError (Labeled LabelState)
++    resolveLabel src (Labeled sp k txt) =
++      fmap (\rs -> Labeled (LabelOk rs) k txt) (resolveSpan src sp)
++
++-- | Total, multi-source construction: resolves every span it can against its
++-- own group's source; a span that fails becomes 'LabelStale' in its original
++-- position within its own group — never dropped, and never moved to another
++-- group. Every group ends up with exactly as many labels, in the same order,
++-- as it was given, and the groups themselves keep their input order: the same
++-- count/ordering guarantee 'mkContextDegrading' gave one source, now held
++-- pointwise by every source.
++mkContextMultiDegrading :: NonEmpty (NamedSource, NonEmpty (Labeled Span)) -> Context
++mkContextMultiDegrading = HasLabels . fmap resolveGroup
++  where
++    resolveGroup :: (NamedSource, NonEmpty (Labeled Span)) -> SourceGroup
++    resolveGroup (src, labels) = SourceGroup src (fmap (resolveOrStale src) labels)
++
++    resolveOrStale :: NamedSource -> Labeled Span -> Labeled LabelState
++    resolveOrStale src (Labeled sp k txt) =
++      case resolveSpan src sp of
++        Right rs  -> Labeled (LabelOk rs) k txt
++        Left err  -> Labeled (LabelStale (spanErrorReason err)) k txt
++
+ -- | Strict construction: succeeds only if /every/ span resolves. Intended for a
+ -- domain error type's own smart constructor, so that holding such a value
+ -- proves its context is fully resolvable. Returns 'Left' for the first
+ -- out-of-bounds span.
++--
++-- A one-group special case of 'mkContextMulti' — not a second copy of the
++-- resolution logic.
+ mkContext :: NamedSource -> NonEmpty (Labeled Span) -> Either ContextError Context
+-mkContext src labels =
+-  case traverse resolveLabel labels of
+-    Left err   -> Left (ContextError err)
+-    Right lbls -> Right (HasLabels src lbls)
+-  where
+-    resolveLabel :: Labeled Span -> Either SpanError (Labeled LabelState)
+-    resolveLabel (Labeled sp k txt) =
+-      fmap (\rs -> Labeled (LabelOk rs) k txt) (resolveSpan src sp)
++mkContext src labels = mkContextMulti ((src, labels) :| [])
+ 
+ -- | Total construction: resolves every span it can; a span that fails becomes
+ -- 'LabelStale' /in the same position/, never dropped. The result always has
+ -- exactly as many labels, in the same order, as the input — this is the
+ -- count/ordering guarantee that is the whole point of the type.
++--
++-- A one-group special case of 'mkContextMultiDegrading' — not a second copy
++-- of the degrading logic.
+ mkContextDegrading :: NamedSource -> NonEmpty (Labeled Span) -> Context
+-mkContextDegrading src = HasLabels src . fmap resolveOrStale
+-  where
+-    resolveOrStale :: Labeled Span -> Labeled LabelState
+-    resolveOrStale (Labeled sp k txt) =
+-      case resolveSpan src sp of
+-        Right rs  -> Labeled (LabelOk rs) k txt
+-        Left err  -> Labeled (LabelStale (spanErrorReason err)) k txt
++mkContextDegrading src labels = mkContextMultiDegrading ((src, labels) :| [])
+ 
+ -- | The shared dispatch both the derive macro and manual instances call.
+ -- An empty label list is the only route to 'NoContext'; a non-empty one goes
+@@ -130,3 +201,27 @@ buildContextWith _   []       = NoContext
+ buildContextWith src (x : xs) = mkContextDegrading src (fmap toLabeled (x :| xs))
+   where
+     toLabeled (sp, k, txt) = Labeled sp k txt
++
++-- | Multi-source convenience construction, mirroring 'buildContextWith' one
++-- level up: a non-empty list of @(source, entries)@ groups, each group a
++-- plain list of @(span, label kind, optional label text)@ triples. A source
++-- paired with an empty entry list contributes no group at all — mirroring
++-- 'buildContext'\'s "empty list -> 'NoContext'" convention, but per source,
++-- since a source nobody labels shouldn't appear in the rendered output. The
++-- result is 'NoContext' only if /every/ group is empty; otherwise it holds
++-- exactly the non-empty groups, in their input order, each resolved via
++-- 'mkContextMultiDegrading'.
++buildContextMulti :: NonEmpty (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))]) -> Context
++buildContextMulti groups =
++  maybe NoContext mkContextMultiDegrading
++    (NE.nonEmpty (concatMap nonEmptyGroup (NE.toList groups)))
++  where
++    nonEmptyGroup
++      :: (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))])
++      -> [(NamedSource, NonEmpty (Labeled Span))]
++    nonEmptyGroup (src, entries) =
++      case NE.nonEmpty (map toLabeled entries) of
++        Nothing  -> []
++        Just lbs -> [(src, lbs)]
++
++    toLabeled (sp, k, txt) = Labeled sp k txt
+diff --git a/src/Tadka/Internal/Renderer/Graphical.hs b/src/Tadka/Internal/Renderer/Graphical.hs
+index afc05d4..574bcfb 100644
+--- a/src/Tadka/Internal/Renderer/Graphical.hs
++++ b/src/Tadka/Internal/Renderer/Graphical.hs
+@@ -26,7 +26,7 @@ module Tadka.Internal.Renderer.Graphical
+   ) where
+ 
+ import           Data.Char                     (isControl)
+-import           Data.List                     (mapAccumL)
++import           Data.List                     (intercalate, mapAccumL)
+ import           Data.List.NonEmpty            (NonEmpty (..))
+ import qualified Data.List.NonEmpty            as NE
+ import           Data.Text                     (Text)
+@@ -42,8 +42,9 @@ import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated,
+ import           Tadka.Internal.Ann            (Ann (..))
+ import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
+                                                 UnicodeMode (..))
+-import           Tadka.Internal.Context        (Context (..), LabelKind (..),
+-                                                LabelState (..), Labeled (..))
++import           Tadka.Internal.Context        (Context, LabelKind (..),
++                                                LabelState (..), Labeled (..),
++                                                SourceGroup (..), contextSourceGroups)
+ import           Tadka.Internal.SourceCode     (SourceCode (..))
+ import           Tadka.Internal.Renderer.LinePlan (PlanEntry (..), planLines)
+ import           Tadka.Internal.Renderer.Layout   (CellKind (..), assignLanes,
+@@ -232,17 +233,35 @@ headerLine cmode sev mcode msg =
+ -- === Snippet ==============================================================
+ 
+ -- Width of the line-number gutter: enough for the largest displayed line
+--- number, or 1 when there are no resolved labels.
++-- number across every source group (Phase 12: one shared width keeps the
++-- gutter, and everything indented to it -- help/see/related lines -- aligned
++-- across a multi-file report), or 1 when there are no resolved labels
++-- anywhere. A one-group context yields exactly the width it always did.
+ gutterWidth :: Context -> Int
+-gutterWidth ctx = length (show (foldr max 1 (okEndLines ctx)))
++gutterWidth ctx = length (show (foldr max 1 (concatMap okEndLines (contextSourceGroups ctx))))
+   where
+-    okEndLines NoContext          = []
+-    okEndLines (HasLabels _ lbls) =
++    okEndLines (SourceGroup _ lbls) =
+       [ lcLine (resolvedEnd rs) | Labeled (LabelOk rs) _ _ <- NE.toList lbls ]
+ 
++-- | One graphical block (location line, gutter, source, carets) per source
++-- group, in group order, separated by a lone rail line -- the same
++-- separator convention 'relatedChild' already uses between a nested
++-- diagnostic's own snippet and its related forest. A one-group context (the
++-- only shape v1 ever produced before Phase 12) yields exactly the single
++-- block 'groupSnippetLines' always produced, with no separator: this is a
++-- strict generalisation, not a different rendering for the case that already
++-- worked.
+ snippetLines :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int -> Context -> [Text]
+-snippetLines _ _ _ _ _ _ _ NoContext = []
+-snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
++snippetLines glyphs sev cmode palette tabW ctxLines gw ctx =
++  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode palette tabW ctxLines gw)
++                              (contextSourceGroups ctx))
++  where
++    groupSep = T.replicate (gw + 1) " " <> gRail glyphs
++
++groupSnippetLines
++  :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int
++  -> SourceGroup -> [Text]
++groupSnippetLines glyphs sev cmode palette tabW ctxLines gw (SourceGroup src labels) =
+   [locationLine, railBlank] ++ body
+   where
+     indexed = zip [0 ..] (NE.toList labels)
+diff --git a/src/Tadka/Internal/Renderer/Json.hs b/src/Tadka/Internal/Renderer/Json.hs
+index 96a32f3..4f51cfc 100644
+--- a/src/Tadka/Internal/Renderer/Json.hs
++++ b/src/Tadka/Internal/Renderer/Json.hs
+@@ -33,13 +33,14 @@ import           Prettyprinter             (Doc, LayoutOptions (..),
+ import           Prettyprinter.Render.Text (renderStrict)
+ 
+ import           Tadka.Internal.Ann        (Ann)
+-import           Tadka.Internal.Context    (Context (..), LabelKind (..),
+-                                            LabelState (..), Labeled (..))
++import           Tadka.Internal.Context    (Context, LabelKind (..),
++                                            LabelState (..), Labeled (..),
++                                            SourceGroup (..), contextSourceGroups)
+ import           Tadka.Internal.Diagnostic (Diagnostic (..), SomeDiagnostic (..))
+ import           Tadka.Internal.Related    (RelatedTree (..), TerminationReason (..),
+                                             walkCauses, walkRelated)
+ import           Tadka.Internal.Span       (LineCol (..), resolvedStart, spanLength)
+-import           Tadka.Internal.Types      (severityJsonTag, unDiagnosticCode,
++import           Tadka.Internal.Types      (severityJsonTag, sourceName, unDiagnosticCode,
+                                             unLength, unUrl)
+ 
+ -- | Resolved settings for the JSON handler (populated only by @selectRenderer@).
+@@ -49,9 +50,13 @@ newtype JsonOptions = JsonOptions
+ 
+ -- | One label in the DTO. @line@\/@column@\/@length@ are 'Nothing' (JSON null)
+ -- when the label is stale; @stale@ always reflects
+--- 'Tadka.Internal.Context.LabelState' explicitly.
++-- 'Tadka.Internal.Context.LabelState' explicitly. @file@ is always present
++-- (Phase 12): it names the source the label belongs to, even when the label
++-- is stale, so a machine consumer never has to infer which file a label was
++-- meant for from position alone.
+ data LabelDTO = LabelDTO
+-  { ldLine    :: Maybe Int
++  { ldFile    :: Text
++  , ldLine    :: Maybe Int
+   , ldColumn  :: Maybe Int
+   , ldLength  :: Maybe Int
+   , ldText    :: Maybe Text
+@@ -78,7 +83,8 @@ data DiagnosticDTO = DiagnosticDTO
+ 
+ instance ToJSON LabelDTO where
+   toJSON l = object
+-    [ "line"    .= ldLine l
++    [ "file"    .= ldFile l
++    , "line"    .= ldLine l
+     , "column"  .= ldColumn l
+     , "length"  .= ldLength l
+     , "text"    .= ldText l
+@@ -130,19 +136,23 @@ toDTO (RelatedTree (SomeDiagnostic e) children term) = DiagnosticDTO
+   where isCycle (RelatedTree _ _ t) = t == CycleOmitted
+ 
+ labelsDTO :: Context -> [LabelDTO]
+-labelsDTO NoContext          = []
+-labelsDTO (HasLabels _ lbls) = map toLabel (NE.toList lbls)
++labelsDTO = concatMap groupLabels . contextSourceGroups
+   where
+-    toLabel (Labeled (LabelOk rs) k txt) = LabelDTO
+-      { ldLine    = Just (lcLine (resolvedStart rs))
++    groupLabels :: SourceGroup -> [LabelDTO]
++    groupLabels (SourceGroup src lbls) = map (toLabel (sourceName src)) (NE.toList lbls)
++
++    toLabel :: Text -> Labeled LabelState -> LabelDTO
++    toLabel file (Labeled (LabelOk rs) k txt) = LabelDTO
++      { ldFile    = file
++      , ldLine    = Just (lcLine (resolvedStart rs))
+       , ldColumn  = Just (lcColumn (resolvedStart rs))
+       , ldLength  = Just (unLength (spanLength rs))
+       , ldText    = docToText <$> txt
+       , ldPrimary = k == Primary
+       , ldStale   = False
+       }
+-    toLabel (Labeled (LabelStale _) k txt) = LabelDTO
+-      { ldLine = Nothing, ldColumn = Nothing, ldLength = Nothing
++    toLabel file (Labeled (LabelStale _) k txt) = LabelDTO
++      { ldFile = file, ldLine = Nothing, ldColumn = Nothing, ldLength = Nothing
+       , ldText = docToText <$> txt, ldPrimary = k == Primary, ldStale = True
+       }
+ 
+diff --git a/src/Tadka/Internal/Renderer/Narratable.hs b/src/Tadka/Internal/Renderer/Narratable.hs
+index 2b5005a..f0e208e 100644
+--- a/src/Tadka/Internal/Renderer/Narratable.hs
++++ b/src/Tadka/Internal/Renderer/Narratable.hs
+@@ -26,8 +26,9 @@ import           Prettyprinter                         (Doc, LayoutOptions (..),
+ import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated, treeForm)
+ 
+ import           Tadka.Internal.Ann                    (Ann (..))
+-import           Tadka.Internal.Context                (Context (..), LabelKind (..),
+-                                                        LabelState (..), Labeled (..))
++import           Tadka.Internal.Context                (Context, LabelKind (..),
++                                                        LabelState (..), Labeled (..),
++                                                        SourceGroup (..), contextSourceGroups)
+ import           Tadka.Internal.SourceCode             (SourceCode (..))
+ import           Tadka.Internal.Diagnostic             (Diagnostic (..), SomeDiagnostic (..))
+ import           Tadka.Internal.Related                (RelatedTree (..),
+@@ -84,9 +85,18 @@ headerSentence sev mcode msg = prefix <> " " <> codeClause <> msg <> "."
+ 
+ -- === Context (location, source, labels) ===================================
+ 
++-- | One prose block per source group, in group order (Phase 12: a context can
++-- now span more than one source; each group gets its own \"Location: ...\"
++-- sentence anchored on that group's own first primary label, exactly as the
++-- single-group case always has). A one-group context — the only shape v1 ever
++-- produced before Phase 12 — yields exactly the same sentences, in the same
++-- order, as before: this is a strict generalisation of the prior behaviour,
++-- not a different rendering for the case that already worked.
+ contextSentences :: Context -> [Text]
+-contextSentences NoContext = []
+-contextSentences (HasLabels src labels) = locationSentence ++ labelReadouts
++contextSentences = concatMap groupSentences . contextSourceGroups
++
++groupSentences :: SourceGroup -> [Text]
++groupSentences (SourceGroup src labels) = locationSentence ++ labelReadouts
+   where
+     indexed = NE.toList labels
+     oks     = [ (k, rs) | Labeled (LabelOk rs) k _ <- indexed ]
+diff --git a/tadka.cabal b/tadka.cabal
+index 4be282a..ca1fdbc 100644
+--- a/tadka.cabal
++++ b/tadka.cabal
+@@ -135,6 +135,7 @@ test-suite props
+                     Phase8
+                     Phase9
+                     Phase11
++                    Phase12
+                     Tabs
+                     TermColor
+                     Hyperlink
+diff --git a/test/golden/Fixtures.hs b/test/golden/Fixtures.hs
+index c10f041..d59dda4 100644
+--- a/test/golden/Fixtures.hs
++++ b/test/golden/Fixtures.hs
+@@ -12,13 +12,14 @@ module Fixtures
+   , single
+   ) where
+ 
++import           Data.List.NonEmpty (NonEmpty (..))
+ import           Data.Text     (Text)
+ import qualified Data.Text     as T
+ import           Prettyprinter (Doc, pretty)
+ import           Language.Haskell.TH (litE, pprint, stringL)
+ 
+ import           Tadka
+-import           Tadka.Internal (buildContext, buildContextWith)
++import           Tadka.Internal (buildContext, buildContextMulti, buildContextWith)
+ 
+ -- A general-purpose Diagnostic carrier for fixtures.
+ data Fix = Fix
+@@ -164,6 +165,36 @@ cyc =
+             }
+   in d
+ 
++-- 5. Cross-file (Phase 12) -----------------------------------------------
++-- Two sources, each contributing one label: the shape a real "this import
++-- disagrees with that definition" diagnostic takes once a Context can span
++-- more than one file. Exercises all three renderers via the shared fixture
++-- lists below, same as 'single'/'withCause' already do.
++srcModA :: NamedSource
++srcModA = rightOrErr (mkNamedSource "ModuleA.hs" "import ModuleB (widget)\nmain = widget\n")
++
++srcModB :: NamedSource
++srcModB = rightOrErr (mkNamedSource "ModuleB.hs" "widget :: Int\nwidget = 42\n")
++
++crossFile :: Fix
++crossFile = Fix
++  { fMsg  = "type mismatch across modules"
++  , fCode = Just (mkCode "tadka::E0500")
++  , fCtx  = buildContextMulti
++              ( ( srcModA
++                , [ (rightOrErr (mkSpan (T.length "import ModuleB (") 6), Secondary,
++                     label "imported here")
++                  ]
++                )
++              :| [ ( srcModB
++                   , [ (rightOrErr (mkSpan 0 6), Primary, label "defined here as `Int`") ]
++                   )
++                 ]
++              )
++  , fHelp = Just "the two declarations must agree"
++  , fUrl  = Nothing, fRel = [], fId = Nothing
++  }
++
+ fixtures :: [(String, SomeDiagnostic)]
+ fixtures =
+   [ ("single-label",  SomeDiagnostic single)
+@@ -173,6 +204,7 @@ fixtures =
+   , ("tab-indented",  SomeDiagnostic tabIndented)
+   , ("with-cause",    SomeDiagnostic withCause)
+   , ("multi-line",     SomeDiagnostic multiLine)
++  , ("cross-file",     SomeDiagnostic crossFile)
+   ]
+ 
+ -- Tab-indented source: the caret must align under the tab-EXPANDED position.
+@@ -214,6 +246,7 @@ narratableFixtures =
+   [ ("narr-single",    SomeDiagnostic single)
+   , ("narr-truncated", SomeDiagnostic truncatedRoot)
+   , ("narr-cause",     SomeDiagnostic withCause)
++  , ("narr-cross-file", SomeDiagnostic crossFile)
+   ]
+ 
+ -- JSON fixtures (rendered at depth limit 1 by the runner): single (matches the
+@@ -228,6 +261,7 @@ jsonFixtures =
+   , ("json-cycle",     SomeDiagnostic cyc)
+   , ("json-truncated", SomeDiagnostic truncatedRoot)
+   , ("json-cause",     SomeDiagnostic withCause)
++  , ("json-cross-file", SomeDiagnostic crossFile)
+   ]
+ 
+ -- Derive-macro example from vision §6, plus a dump of the generated instance
+diff --git a/test/golden/Main.hs b/test/golden/Main.hs
+index 4b51bc0..d386e19 100644
+--- a/test/golden/Main.hs
++++ b/test/golden/Main.hs
+@@ -85,7 +85,7 @@ prettyJSON :: A.Value -> Text
+ prettyJSON = go 0
+   where
+     prefOrder =
+-      [ "code","severity","message","labels","line","column","length","text"
++      [ "code","severity","message","labels","file","line","column","length","text"
+       , "primary","stale","help","url","related","causes","truncated","cycleOmitted" ]
+     go :: Int -> A.Value -> Text
+     go ind v = case v of
+diff --git a/test/golden/fixtures/cross-file.txt b/test/golden/fixtures/cross-file.txt
+new file mode 100644
+index 0000000..1ca34ef
+--- /dev/null
++++ b/test/golden/fixtures/cross-file.txt
+@@ -0,0 +1,12 @@
++error[tadka::E0500]: type mismatch across modules
++  ┌─ ModuleA.hs:1:17
++  │
++1 │ import ModuleB (widget)
++  │                 ------ imported here
++  │
++  ┌─ ModuleB.hs:1:1
++  │
++1 │ widget :: Int
++  │ ^^^^^^ defined here as `Int`
++  │
++  = help: the two declarations must agree
+\ No newline at end of file
+diff --git a/test/golden/fixtures/json-cross-file.txt b/test/golden/fixtures/json-cross-file.txt
+new file mode 100644
+index 0000000..59ff123
+--- /dev/null
++++ b/test/golden/fixtures/json-cross-file.txt
+@@ -0,0 +1,15 @@
++{
++  "code": "tadka::E0500",
++  "severity": "error",
++  "message": "type mismatch across modules",
++  "labels": [
++    { "file": "ModuleA.hs", "line": 1, "column": 17, "length": 6, "text": "imported here", "primary": false, "stale": false },
++    { "file": "ModuleB.hs", "line": 1, "column": 1, "length": 6, "text": "defined here as `Int`", "primary": true, "stale": false }
++  ],
++  "help": "the two declarations must agree",
++  "url": null,
++  "related": [],
++  "causes": [],
++  "truncated": false,
++  "cycleOmitted": false
++}
+\ No newline at end of file
+diff --git a/test/golden/fixtures/json-cycle.txt b/test/golden/fixtures/json-cycle.txt
+index c822fb1..9c8b35b 100644
+--- a/test/golden/fixtures/json-cycle.txt
++++ b/test/golden/fixtures/json-cycle.txt
+@@ -3,7 +3,7 @@
+   "severity": "error",
+   "message": "conflicting instance defined here",
+   "labels": [
+-    { "line": 1, "column": 1, "length": 8, "text": "conflicting instance", "primary": true, "stale": false }
++    { "file": "Prelude.hs", "line": 1, "column": 1, "length": 8, "text": "conflicting instance", "primary": true, "stale": false }
+   ],
+   "help": null,
+   "url": null,
+diff --git a/test/golden/fixtures/json-single.txt b/test/golden/fixtures/json-single.txt
+index 4ed682f..908d876 100644
+--- a/test/golden/fixtures/json-single.txt
++++ b/test/golden/fixtures/json-single.txt
+@@ -3,7 +3,7 @@
+   "severity": "error",
+   "message": "undefined variable `foo`",
+   "labels": [
+-    { "line": 3, "column": 9, "length": 3, "text": "not in scope", "primary": true, "stale": false }
++    { "file": "example.hs", "line": 3, "column": 9, "length": 3, "text": "not in scope", "primary": true, "stale": false }
+   ],
+   "help": "did you mean `bar`?",
+   "url": "https://example.org/errors/E0001",
+diff --git a/test/golden/fixtures/json-truncated.txt b/test/golden/fixtures/json-truncated.txt
+index c7b7c14..768bfc8 100644
+--- a/test/golden/fixtures/json-truncated.txt
++++ b/test/golden/fixtures/json-truncated.txt
+@@ -3,7 +3,7 @@
+   "severity": "error",
+   "message": "top-level problem",
+   "labels": [
+-    { "line": 3, "column": 9, "length": 3, "text": "here", "primary": true, "stale": false }
++    { "file": "example.hs", "line": 3, "column": 9, "length": 3, "text": "here", "primary": true, "stale": false }
+   ],
+   "help": "see the related items",
+   "url": null,
+diff --git a/test/golden/fixtures/narr-cross-file.txt b/test/golden/fixtures/narr-cross-file.txt
+new file mode 100644
+index 0000000..9738a30
+--- /dev/null
++++ b/test/golden/fixtures/narr-cross-file.txt
+@@ -0,0 +1,8 @@
++Error, code tadka::E0500: type mismatch across modules.
++Location: ModuleA.hs, line 1, column 17.
++Source line 1: "import ModuleB (widget)".
++Related context is at columns 17 through 22, labeled: imported here.
++Location: ModuleB.hs, line 1, column 1.
++Source line 1: "widget :: Int".
++The problem is at columns 1 through 6, labeled: defined here as `Int`.
++Help: the two declarations must agree
+\ No newline at end of file
+diff --git a/test/props/Main.hs b/test/props/Main.hs
+index 8e36a05..a7895a7 100644
+--- a/test/props/Main.hs
++++ b/test/props/Main.hs
+@@ -18,6 +18,7 @@ import qualified Phase7
+ import qualified Phase8
+ import qualified Phase9
+ import qualified Phase11
++import qualified Phase12
+ import qualified Tabs
+ import qualified TermColor
+ import qualified Hyperlink
+@@ -33,5 +34,5 @@ import qualified EdgeCases
+ main :: IO ()
+ main = do
+   setLocaleEncoding utf8   -- tadka emits Unicode; be locale-independent
+-  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Tabs.group, TermColor.group, Hyperlink.group, LabelCollection.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
++  results <- traverse checkParallel [Phase1.group, Phase2.group, Phase3.group, Phase4.group, Phase5.group, Phase6.group, Phase7.group, Phase8.group, Phase9.group, Phase11.group, Phase12.group, Tabs.group, TermColor.group, Hyperlink.group, LabelCollection.group, Labels.group, Cause.group, Source.group, LinePlanSpec.group, LayoutSpec.group, MultiLine.group, EdgeCases.group]
+   unless (and results) exitFailure
+diff --git a/test/props/Phase12.hs b/test/props/Phase12.hs
+new file mode 100644
+index 0000000..034eb12
+--- /dev/null
++++ b/test/props/Phase12.hs
+@@ -0,0 +1,163 @@
++{-# LANGUAGE OverloadedStrings #-}
++{-# LANGUAGE TupleSections #-}
++
++-- | Phase 12 properties: multi-source 'Context' construction. The crux is the
++-- same as Phase 2's, extended pointwise across sources: 'mkContextMultiDegrading'
++-- never changes a group's label count or order, group order itself is never
++-- changed, and every single-source function is exactly the one-group special
++-- case of its multi-source counterpart -- never a second, divergent
++-- implementation.
++module Phase12 (group) where
++
++import           Data.Either        (isLeft)
++import           Data.List.NonEmpty (NonEmpty (..), (<|))
++import qualified Data.List.NonEmpty as NE
++import           Data.Text          (Text)
++import           Prettyprinter      (Doc, pretty)
++
++import           Hedgehog
++                   (Gen, Group (..), Property, failure, forAll, property,
++                    success, withTests, (===))
++import qualified Hedgehog.Gen       as Gen
++import qualified Hedgehog.Range     as Range
++
++import           Tadka
++import           Tadka.Internal     (buildContextMulti)
++
++group :: Group
++group = Group "Phase 12 - multi-source context"
++  [ ("mkContextMulti is Left iff any span, in any group, is out of bounds",
++      prop_multiStrict)
++  , ("mkContextMultiDegrading never changes any group's label count/order",
++      prop_multiDegradingCount)
++  , ("mkContext/mkContextDegrading are the one-group case of their multi- counterparts",
++      prop_singleGroupMatchesMulti)
++  , ("buildContextMulti with every group empty = NoContext",
++      prop_buildContextMultiAllEmpty)
++  , ("buildContextMulti dispatches to mkContextMultiDegrading",
++      prop_buildContextMultiDispatch)
++  , ("buildContextMulti drops an empty group without affecting the others",
++      prop_buildContextMultiDropsEmptyGroups)
++  ]
++
++-- === Generators (mirroring Phase2's, one source/label-list pair per group) ==
++
++genSourceText :: Gen Text
++genSourceText =
++  Gen.text (Range.linear 0 40)
++    (Gen.frequency [(6, Gen.alphaNum), (2, Gen.constant ' '), (2, Gen.constant '\n')])
++
++genNamedSource :: Gen NamedSource
++genNamedSource = do
++  name <- Gen.text (Range.linear 1 8) Gen.alpha
++  txt  <- genSourceText
++  either (const Gen.discard) pure (mkNamedSource name txt)
++
++genSpan :: Gen Span
++genSpan = do
++  o <- Gen.int (Range.linear 0 50)
++  l <- Gen.int (Range.linear 0 50)
++  either (const Gen.discard) pure (mkSpan o l)
++
++genLabelText :: Gen (Maybe (Doc Ann))
++genLabelText =
++  Gen.choice [pure Nothing, Just . pretty <$> Gen.text (Range.linear 1 10) Gen.alpha]
++
++genLabelKind :: Gen LabelKind
++genLabelKind = Gen.element [Primary, Secondary]
++
++genLabeledSpan :: Gen (Labeled Span)
++genLabeledSpan = Labeled <$> genSpan <*> genLabelKind <*> genLabelText
++
++genLabeledSpans :: Gen (NonEmpty (Labeled Span))
++genLabeledSpans = do
++  x  <- genLabeledSpan
++  xs <- Gen.list (Range.linear 0 6) genLabeledSpan
++  pure (x :| xs)
++
++-- One group: a source, and the non-empty label list resolved against it.
++genGroup :: Gen (NamedSource, NonEmpty (Labeled Span))
++genGroup = (,) <$> genNamedSource <*> genLabeledSpans
++
++-- One to four groups, in generation order (order matters -- these properties
++-- check it's preserved).
++genGroups :: Gen (NonEmpty (NamedSource, NonEmpty (Labeled Span)))
++genGroups = do
++  g  <- genGroup
++  gs <- Gen.list (Range.linear 0 3) genGroup
++  pure (g :| gs)
++
++isStale :: LabelState -> Bool
++isStale (LabelStale _) = True
++isStale (LabelOk _)    = False
++
++-- Entries shape 'buildContextMulti' takes, from a group's already-resolved-
++-- shaped input -- the same (span, kind, text) triples 'buildContextWith'
++-- takes per label, one source per group.
++asEntries :: (NamedSource, NonEmpty (Labeled Span)) -> (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))])
++asEntries (src, lbls) = (src, map toEntry (NE.toList lbls))
++  where toEntry (Labeled sp k txt) = (sp, k, txt)
++
++-- === Properties ==============================================================
++
++prop_multiStrict :: Property
++prop_multiStrict = property $ do
++  groups <- forAll genGroups
++  let anyOOB = any groupHasOOB (NE.toList groups)
++      groupHasOOB (src, lbls) =
++        any (\(Labeled sp _ _) -> isLeft (resolveSpan src sp)) (NE.toList lbls)
++  isLeft (mkContextMulti groups) === anyOOB
++
++prop_multiDegradingCount :: Property
++prop_multiDegradingCount = property $ do
++  groups <- forAll genGroups
++  let states   = contextLabelStates (mkContextMultiDegrading groups)
++      expected = concatMap expectGroup (NE.toList groups)
++      expectGroup (src, lbls) =
++        [ isLeft (resolveSpan src sp) | Labeled sp _ _ <- NE.toList lbls ]
++  -- 1. total count preserved across every group
++  length states === sum (fmap (NE.length . snd) groups)
++  -- 2. LabelStale in exactly the positions whose span fails to resolve,
++  --    per group, in group order -- never dropped, never reordered, and
++  --    never attributed to the wrong group's source.
++  map isStale states === expected
++
++prop_singleGroupMatchesMulti :: Property
++prop_singleGroupMatchesMulti = property $ do
++  src  <- forAll genNamedSource
++  lbls <- forAll genLabeledSpans
++  -- The total constructor: single-source result matches the one-group
++  -- multi-source result, label for label.
++  contextLabelStates (mkContextDegrading src lbls)
++    === contextLabelStates (mkContextMultiDegrading ((src, lbls) :| []))
++  -- The strict constructor: same success/failure shape, and the same
++  -- resulting labels on success.
++  case (mkContext src lbls, mkContextMulti ((src, lbls) :| [])) of
++    (Left _,    Left _)    -> success
++    (Right c1,  Right c2)  -> contextLabelStates c1 === contextLabelStates c2
++    (Left _,    Right _)   -> failure
++    (Right _,   Left _)    -> failure
++
++prop_buildContextMultiAllEmpty :: Property
++prop_buildContextMultiAllEmpty = withTests 20 . property $ do
++  srcs <- forAll (Gen.list (Range.linear 1 4) genNamedSource)
++  case NE.nonEmpty srcs of
++    Nothing -> success   -- unreachable: Range.linear 1 4 never generates []
++    Just ne -> case buildContextMulti (fmap (, []) ne) of
++      NoContext -> success
++      _         -> failure
++
++prop_buildContextMultiDispatch :: Property
++prop_buildContextMultiDispatch = property $ do
++  groups <- forAll genGroups
++  let built  = buildContextMulti (fmap asEntries groups)
++      viaDeg = mkContextMultiDegrading groups
++  contextLabelStates built === contextLabelStates viaDeg
++
++prop_buildContextMultiDropsEmptyGroups :: Property
++prop_buildContextMultiDropsEmptyGroups = property $ do
++  groups   <- forAll genGroups
++  emptySrc <- forAll genNamedSource
++  let withEmpty = (emptySrc, []) <| fmap asEntries groups
++  contextLabelStates (buildContextMulti withEmpty)
++    === contextLabelStates (buildContextMulti (fmap asEntries groups))

@@ -12,13 +12,14 @@ module Fixtures
   , single
   ) where
 
+import           Data.List.NonEmpty (NonEmpty (..))
 import           Data.Text     (Text)
 import qualified Data.Text     as T
 import           Prettyprinter (Doc, pretty)
 import           Language.Haskell.TH (litE, pprint, stringL)
 
 import           Tadka
-import           Tadka.Internal (buildContext, buildContextWith)
+import           Tadka.Internal (buildContext, buildContextMulti, buildContextWith)
 
 -- A general-purpose Diagnostic carrier for fixtures.
 data Fix = Fix
@@ -164,6 +165,36 @@ cyc =
             }
   in d
 
+-- 5. Cross-file (Phase 12) -----------------------------------------------
+-- Two sources, each contributing one label: the shape a real "this import
+-- disagrees with that definition" diagnostic takes once a Context can span
+-- more than one file. Exercises all three renderers via the shared fixture
+-- lists below, same as 'single'/'withCause' already do.
+srcModA :: NamedSource
+srcModA = rightOrErr (mkNamedSource "ModuleA.hs" "import ModuleB (widget)\nmain = widget\n")
+
+srcModB :: NamedSource
+srcModB = rightOrErr (mkNamedSource "ModuleB.hs" "widget :: Int\nwidget = 42\n")
+
+crossFile :: Fix
+crossFile = Fix
+  { fMsg  = "type mismatch across modules"
+  , fCode = Just (mkCode "tadka::E0500")
+  , fCtx  = buildContextMulti
+              ( ( srcModA
+                , [ (rightOrErr (mkSpan (T.length "import ModuleB (") 6), Secondary,
+                     label "imported here")
+                  ]
+                )
+              :| [ ( srcModB
+                   , [ (rightOrErr (mkSpan 0 6), Primary, label "defined here as `Int`") ]
+                   )
+                 ]
+              )
+  , fHelp = Just "the two declarations must agree"
+  , fUrl  = Nothing, fRel = [], fId = Nothing
+  }
+
 fixtures :: [(String, SomeDiagnostic)]
 fixtures =
   [ ("single-label",  SomeDiagnostic single)
@@ -173,6 +204,7 @@ fixtures =
   , ("tab-indented",  SomeDiagnostic tabIndented)
   , ("with-cause",    SomeDiagnostic withCause)
   , ("multi-line",     SomeDiagnostic multiLine)
+  , ("cross-file",     SomeDiagnostic crossFile)
   ]
 
 -- Tab-indented source: the caret must align under the tab-EXPANDED position.
@@ -214,6 +246,7 @@ narratableFixtures =
   [ ("narr-single",    SomeDiagnostic single)
   , ("narr-truncated", SomeDiagnostic truncatedRoot)
   , ("narr-cause",     SomeDiagnostic withCause)
+  , ("narr-cross-file", SomeDiagnostic crossFile)
   ]
 
 -- JSON fixtures (rendered at depth limit 1 by the runner): single (matches the
@@ -228,6 +261,7 @@ jsonFixtures =
   , ("json-cycle",     SomeDiagnostic cyc)
   , ("json-truncated", SomeDiagnostic truncatedRoot)
   , ("json-cause",     SomeDiagnostic withCause)
+  , ("json-cross-file", SomeDiagnostic crossFile)
   ]
 
 -- Derive-macro example from vision §6, plus a dump of the generated instance

@@ -5,6 +5,58 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
 
 ## Unreleased — miette-parity hardening
 
+### Multi-source diagnostics (Phase 12)
+- **Breaking:** `Tadka.Internal.Renderer.Json`'s `LabelDTO` gains a `file`
+  field, present on every label (`ldFile`/`"file"` in the serialized JSON),
+  including stale ones. Every existing JSON golden fixture with at least one
+  label changes shape (`json-single`, `json-cycle`, `json-truncated`);
+  `json-cause` is unaffected (its diagnostic has no context at all). This
+  closes a real, pre-existing gap independent of multi-source support: the
+  JSON DTO never named which file a label belonged to, even for a
+  single-source diagnostic.
+- `Context` now holds a non-empty, ORDERED sequence of source groups
+  (`SourceGroup`: one `NamedSource` plus its own non-empty, order-preserving
+  label list) instead of exactly one source. This is a strict generalisation:
+  a single-source `Context` is now the one-group case of the same
+  representation, not a different shape. Every existing guarantee —
+  label count/order preserved, `LabelStale` in place rather than dropped —
+  now holds pointwise, per group; group order itself is preserved too.
+- New construction API, mirroring the single-source functions one level up:
+  `mkContextMulti` (strict; `Left` on the first out-of-bounds span in
+  group-then-label order), `mkContextMultiDegrading` (total; degrades per
+  label within its own group), and `Tadka.Internal`'s `buildContextMulti`
+  (the multi-source convenience entry point, analogous to `buildContext`\/
+  `buildContextWith` — a source paired with no labels contributes no group,
+  mirroring `buildContext`'s empty-list convention per source). `mkContext`,
+  `mkContextDegrading`, `buildContext`, and `buildContextWith` are now
+  implemented as the one-group special case of their multi- counterparts —
+  not a second copy of the resolution logic — and are unchanged in signature
+  and behaviour (proven byte-identical: every existing graphical and
+  narratable golden fixture is unchanged).
+- All three renderers updated to walk every source group, in order:
+  - **Graphical** — one `┌─ file:line:col` gutter block per group, separated
+    by the same lone-rail-line convention `relatedChild` already uses between
+    a nested diagnostic's snippet and its related forest. The gutter width is
+    now the maximum needed across every group, so indentation (help/see/
+    related lines) stays aligned across a multi-file report. A one-group
+    context renders exactly the single block it always did, with no
+    separator.
+  - **Narratable** — one `Location: ...` sentence and its label readouts per
+    group, in group order.
+  - **JSON** — every label's DTO carries the name of its own group's source
+    via the new `file` field.
+- The derive macro (`deriveDiagnostic`) and `genericContext` remain
+  single-source only in v1; `buildContextMulti` is a hand-written-instance
+  entry point. Deferred, not forgotten — see `Tadka_Phase12_Spec.md` §6.
+- New `Phase12` property group (6 properties, 100 generated cases each):
+  `mkContextMulti`/`mkContextMultiDegrading`'s per-group and cross-group
+  count/order guarantees, the single-source functions' exact equivalence to
+  their one-group multi- counterparts, and `buildContextMulti`'s empty-group
+  handling. New `cross-file` / `narr-cross-file` / `json-cross-file` golden
+  fixtures, exercising a real two-file diagnostic through all three handlers.
+  Full existing suite (property + golden) re-verified with zero regressions
+  beyond the three JSON fixtures the `file` field intentionally changes.
+
 ### Issue remediation pass
 - **Breaking:** `StaleReason` loses its `SourceMismatch` constructor.
   `resolveSpan` never produced it — the only real producer path is

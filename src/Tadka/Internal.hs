@@ -18,8 +18,9 @@ module Tadka.Internal
   , unsafeUrl
   , buildContext
   , buildContextWith
+  , buildContextMulti
   , mkDiagnosticId
   ) where
 
-import Tadka.Internal.Context (buildContext, buildContextWith)
+import Tadka.Internal.Context (buildContext, buildContextMulti, buildContextWith)
 import Tadka.Internal.Types   (mkDiagnosticId, unsafeDiagnosticCode, unsafeUrl)

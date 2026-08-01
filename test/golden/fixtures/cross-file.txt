@@ -1,0 +1,12 @@
+error[tadka::E0500]: type mismatch across modules
+  ┌─ ModuleA.hs:1:17
+  │
+1 │ import ModuleB (widget)
+  │                 ------ imported here
+  │
+  ┌─ ModuleB.hs:1:1
+  │
+1 │ widget :: Int
+  │ ^^^^^^ defined here as `Int`
+  │
+  = help: the two declarations must agree
