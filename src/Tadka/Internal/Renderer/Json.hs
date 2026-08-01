@@ -33,13 +33,14 @@ import           Prettyprinter             (Doc, LayoutOptions (..),
 import           Prettyprinter.Render.Text (renderStrict)
 
 import           Tadka.Internal.Ann        (Ann)
-import           Tadka.Internal.Context    (Context (..), LabelKind (..),
-                                            LabelState (..), Labeled (..))
+import           Tadka.Internal.Context    (Context, LabelKind (..),
+                                            LabelState (..), Labeled (..),
+                                            SourceGroup (..), contextSourceGroups)
 import           Tadka.Internal.Diagnostic (Diagnostic (..), SomeDiagnostic (..))
 import           Tadka.Internal.Related    (RelatedTree (..), TerminationReason (..),
                                             walkCauses, walkRelated)
 import           Tadka.Internal.Span       (LineCol (..), resolvedStart, spanLength)
-import           Tadka.Internal.Types      (severityJsonTag, unDiagnosticCode,
+import           Tadka.Internal.Types      (severityJsonTag, sourceName, unDiagnosticCode,
                                             unLength, unUrl)
 
 -- | Resolved settings for the JSON handler (populated only by @selectRenderer@).
@@ -49,9 +50,13 @@ newtype JsonOptions = JsonOptions
 
 -- | One label in the DTO. @line@\/@column@\/@length@ are 'Nothing' (JSON null)
 -- when the label is stale; @stale@ always reflects
--- 'Tadka.Internal.Context.LabelState' explicitly.
+-- 'Tadka.Internal.Context.LabelState' explicitly. @file@ is always present
+-- (Phase 12): it names the source the label belongs to, even when the label
+-- is stale, so a machine consumer never has to infer which file a label was
+-- meant for from position alone.
 data LabelDTO = LabelDTO
-  { ldLine    :: Maybe Int
+  { ldFile    :: Text
+  , ldLine    :: Maybe Int
   , ldColumn  :: Maybe Int
   , ldLength  :: Maybe Int
   , ldText    :: Maybe Text
@@ -78,7 +83,8 @@ data DiagnosticDTO = DiagnosticDTO
 
 instance ToJSON LabelDTO where
   toJSON l = object
-    [ "line"    .= ldLine l
+    [ "file"    .= ldFile l
+    , "line"    .= ldLine l
     , "column"  .= ldColumn l
     , "length"  .= ldLength l
     , "text"    .= ldText l
@@ -130,19 +136,23 @@ toDTO (RelatedTree (SomeDiagnostic e) children term) = DiagnosticDTO
   where isCycle (RelatedTree _ _ t) = t == CycleOmitted
 
 labelsDTO :: Context -> [LabelDTO]
-labelsDTO NoContext          = []
-labelsDTO (HasLabels _ lbls) = map toLabel (NE.toList lbls)
+labelsDTO = concatMap groupLabels . contextSourceGroups
   where
-    toLabel (Labeled (LabelOk rs) k txt) = LabelDTO
-      { ldLine    = Just (lcLine (resolvedStart rs))
+    groupLabels :: SourceGroup -> [LabelDTO]
+    groupLabels (SourceGroup src lbls) = map (toLabel (sourceName src)) (NE.toList lbls)
+
+    toLabel :: Text -> Labeled LabelState -> LabelDTO
+    toLabel file (Labeled (LabelOk rs) k txt) = LabelDTO
+      { ldFile    = file
+      , ldLine    = Just (lcLine (resolvedStart rs))
       , ldColumn  = Just (lcColumn (resolvedStart rs))
       , ldLength  = Just (unLength (spanLength rs))
       , ldText    = docToText <$> txt
       , ldPrimary = k == Primary
       , ldStale   = False
       }
-    toLabel (Labeled (LabelStale _) k txt) = LabelDTO
-      { ldLine = Nothing, ldColumn = Nothing, ldLength = Nothing
+    toLabel file (Labeled (LabelStale _) k txt) = LabelDTO
+      { ldFile = file, ldLine = Nothing, ldColumn = Nothing, ldLength = Nothing
       , ldText = docToText <$> txt, ldPrimary = k == Primary, ldStale = True
       }
 

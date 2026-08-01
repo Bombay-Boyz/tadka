@@ -3,7 +3,7 @@
   "severity": "error",
   "message": "conflicting instance defined here",
   "labels": [
-    { "line": 1, "column": 1, "length": 8, "text": "conflicting instance", "primary": true, "stale": false }
+    { "file": "Prelude.hs", "line": 1, "column": 1, "length": 8, "text": "conflicting instance", "primary": true, "stale": false }
   ],
   "help": null,
   "url": null,

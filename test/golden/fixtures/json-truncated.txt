@@ -3,7 +3,7 @@
   "severity": "error",
   "message": "top-level problem",
   "labels": [
-    { "line": 3, "column": 9, "length": 3, "text": "here", "primary": true, "stale": false }
+    { "file": "example.hs", "line": 3, "column": 9, "length": 3, "text": "here", "primary": true, "stale": false }
   ],
   "help": "see the related items",
   "url": null,

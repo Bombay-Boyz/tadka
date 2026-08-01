@@ -1,0 +1,8 @@
+Error, code tadka::E0500: type mismatch across modules.
+Location: ModuleA.hs, line 1, column 17.
+Source line 1: "import ModuleB (widget)".
+Related context is at columns 17 through 22, labeled: imported here.
+Location: ModuleB.hs, line 1, column 1.
+Source line 1: "widget :: Int".
+The problem is at columns 1 through 6, labeled: defined here as `Int`.
+Help: the two declarations must agree

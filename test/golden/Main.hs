@@ -85,7 +85,7 @@ prettyJSON :: A.Value -> Text
 prettyJSON = go 0
   where
     prefOrder =
-      [ "code","severity","message","labels","line","column","length","text"
+      [ "code","severity","message","labels","file","line","column","length","text"
       , "primary","stale","help","url","related","causes","truncated","cycleOmitted" ]
     go :: Int -> A.Value -> Text
     go ind v = case v of

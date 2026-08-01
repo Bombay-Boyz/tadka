@@ -1,0 +1,15 @@
+{
+  "code": "tadka::E0500",
+  "severity": "error",
+  "message": "type mismatch across modules",
+  "labels": [
+    { "file": "ModuleA.hs", "line": 1, "column": 17, "length": 6, "text": "imported here", "primary": false, "stale": false },
+    { "file": "ModuleB.hs", "line": 1, "column": 1, "length": 6, "text": "defined here as `Int`", "primary": true, "stale": false }
+  ],
+  "help": "the two declarations must agree",
+  "url": null,
+  "related": [],
+  "causes": [],
+  "truncated": false,
+  "cycleOmitted": false
+}

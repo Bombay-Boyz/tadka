@@ -26,7 +26,7 @@ module Tadka.Internal.Renderer.Graphical
   ) where
 
 import           Data.Char                     (isControl)
-import           Data.List                     (mapAccumL)
+import           Data.List                     (intercalate, mapAccumL)
 import           Data.List.NonEmpty            (NonEmpty (..))
 import qualified Data.List.NonEmpty            as NE
 import           Data.Text                     (Text)
@@ -42,8 +42,9 @@ import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated,
 import           Tadka.Internal.Ann            (Ann (..))
 import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
                                                 UnicodeMode (..))
-import           Tadka.Internal.Context        (Context (..), LabelKind (..),
-                                                LabelState (..), Labeled (..))
+import           Tadka.Internal.Context        (Context, LabelKind (..),
+                                                LabelState (..), Labeled (..),
+                                                SourceGroup (..), contextSourceGroups)
 import           Tadka.Internal.SourceCode     (SourceCode (..))
 import           Tadka.Internal.Renderer.LinePlan (PlanEntry (..), planLines)
 import           Tadka.Internal.Renderer.Layout   (CellKind (..), assignLanes,
@@ -232,17 +233,35 @@ headerLine cmode sev mcode msg =
 -- === Snippet ==============================================================
 
 -- Width of the line-number gutter: enough for the largest displayed line
--- number, or 1 when there are no resolved labels.
+-- number across every source group (Phase 12: one shared width keeps the
+-- gutter, and everything indented to it -- help/see/related lines -- aligned
+-- across a multi-file report), or 1 when there are no resolved labels
+-- anywhere. A one-group context yields exactly the width it always did.
 gutterWidth :: Context -> Int
-gutterWidth ctx = length (show (foldr max 1 (okEndLines ctx)))
+gutterWidth ctx = length (show (foldr max 1 (concatMap okEndLines (contextSourceGroups ctx))))
   where
-    okEndLines NoContext          = []
-    okEndLines (HasLabels _ lbls) =
+    okEndLines (SourceGroup _ lbls) =
       [ lcLine (resolvedEnd rs) | Labeled (LabelOk rs) _ _ <- NE.toList lbls ]
 
+-- | One graphical block (location line, gutter, source, carets) per source
+-- group, in group order, separated by a lone rail line -- the same
+-- separator convention 'relatedChild' already uses between a nested
+-- diagnostic's own snippet and its related forest. A one-group context (the
+-- only shape v1 ever produced before Phase 12) yields exactly the single
+-- block 'groupSnippetLines' always produced, with no separator: this is a
+-- strict generalisation, not a different rendering for the case that already
+-- worked.
 snippetLines :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int -> Context -> [Text]
-snippetLines _ _ _ _ _ _ _ NoContext = []
-snippetLines glyphs sev cmode palette tabW ctxLines gw (HasLabels src labels) =
+snippetLines glyphs sev cmode palette tabW ctxLines gw ctx =
+  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode palette tabW ctxLines gw)
+                              (contextSourceGroups ctx))
+  where
+    groupSep = T.replicate (gw + 1) " " <> gRail glyphs
+
+groupSnippetLines
+  :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int
+  -> SourceGroup -> [Text]
+groupSnippetLines glyphs sev cmode palette tabW ctxLines gw (SourceGroup src labels) =
   [locationLine, railBlank] ++ body
   where
     indexed = zip [0 ..] (NE.toList labels)
