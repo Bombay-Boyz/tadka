@@ -16,7 +16,8 @@ import qualified Data.Attoparsec.Text      as A
 import qualified GHC.Data.Strict            as Strict
 import           GHC.Data.FastString        (fsLit)
 import           GHC.Types.SrcLoc          (SrcSpan (..), mkRealSrcLoc, mkRealSrcSpan,
-                                            srcSpanStartCol, srcSpanStartLine)
+                                            srcSpanEndCol, srcSpanEndLine, srcSpanStartCol,
+                                            srcSpanStartLine)
 import qualified Data.List.NonEmpty         as NE
 import           Text.Megaparsec           (Parsec, attachSourcePos, bundleErrors,
                                             bundlePosState, runParser)
@@ -26,7 +27,7 @@ import           Text.Megaparsec.Pos       (sourceColumn, sourceLine, unPos)
 
 import           Tadka
 import           Tadka.Interop.Attoparsec  (consumedOffset)
-import           Tadka.Interop.GHC         (spanFromSrcSpan)
+import           Tadka.Interop.GHC         (SrcSpanConvError (..), spanFromSrcSpan)
 import           Tadka.Interop.Megaparsec  (spanFromError)
 
 rightOrErr :: Show a => Either a b -> b
@@ -49,6 +50,17 @@ ghcCheck =
       mine = resolveAt ns sp
       ghc  = (srcSpanStartLine rss, srcSpanStartCol rss)
   in ("ghc SrcSpan line/col round-trips", mine == ghc && mine == (2, 3))
+
+-- A span whose start resolves but whose end is out of bounds must name the
+-- END position in the error, not fall back to reporting the start.
+ghcEndAttributionCheck :: (String, Bool)
+ghcEndAttributionCheck =
+  let src = "aaaa\nbbbbbb\ncccc\n"
+      rss = mkRealSrcSpan (mkRealSrcLoc (fsLit "f.hs") 2 3) (mkRealSrcLoc (fsLit "f.hs") 99 1)
+      ss  = RealSrcSpan rss Strict.Nothing
+  in ( "ghc SrcSpan out-of-bounds end is attributed to the end, not the start"
+     , spanFromSrcSpan src ss == Left (LineColOutOfBounds (srcSpanEndLine rss) (srcSpanEndCol rss))
+     )
 
 -- === megaparsec ============================================================
 type P = Parsec Void Text
@@ -86,7 +98,7 @@ attoCheck =
 
 main :: IO ()
 main = do
-  let checks = [ghcCheck, megaCheck, attoCheck]
+  let checks = [ghcCheck, ghcEndAttributionCheck, megaCheck, attoCheck]
   results <- mapM report checks
   unless (and results) exitFailure
   where

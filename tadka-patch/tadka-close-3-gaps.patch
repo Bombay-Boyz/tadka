@@ -1,0 +1,383 @@
+diff --git a/interop/ghc/Tadka/Interop/GHC.hs b/interop/ghc/Tadka/Interop/GHC.hs
+index 50a0e17..184deed 100644
+--- a/interop/ghc/Tadka/Interop/GHC.hs
++++ b/interop/ghc/Tadka/Interop/GHC.hs
+@@ -57,12 +57,29 @@ offsetFromLineCol src line col = do
+ 
+ -- | Convert a GHC 'SrcSpan' to a tadka 'Span', given the source text (needed to
+ -- turn GHC's 1-based line/column into a character offset and length).
++--
++-- The four-way case split below is exhaustive over which of the two
++-- endpoints resolved: both, only the start, only the end, or neither. Each
++-- arm names the specific endpoint at fault rather than defaulting to the
++-- start, so 'LineColOutOfBounds' always describes the position that was
++-- actually out of bounds.
+ spanFromSrcSpan :: Text -> SrcSpan -> Either SrcSpanConvError Span
+ spanFromSrcSpan _   (UnhelpfulSpan _) = Left UnhelpfulSrcSpan
+ spanFromSrcSpan src (RealSrcSpan rss _) =
+   case (offsetFromLineCol src (srcSpanStartLine rss) (srcSpanStartCol rss),
+         offsetFromLineCol src (srcSpanEndLine rss)   (srcSpanEndCol rss)) of
++    (Nothing, _) -> Left (LineColOutOfBounds (srcSpanStartLine rss) (srcSpanStartCol rss))
++    (_, Nothing) -> Left (LineColOutOfBounds (srcSpanEndLine rss)   (srcSpanEndCol rss))
+     (Just s, Just e)
+-      | e >= s    -> either (const (Left NegativeSpanLength)) Right (mkSpan s (e - s))
++      | e >= s    -> mkSpanNonNegative s (e - s)
+       | otherwise -> Left NegativeSpanLength
+-    _ -> Left (LineColOutOfBounds (srcSpanStartLine rss) (srcSpanStartCol rss))
++
++-- | 'mkSpan', specialised to a call site where both arguments are already
++-- non-negative by construction (`max 0` is a no-op on them): 'mkSpan' can
++-- only fail on a negative offset or a negative length, so with both clamped
++-- here — not merely reasoned to be non-negative three functions away in
++-- 'offsetFromLineCol' — its 'Left' case is unreachable by local inspection,
++-- not by trusting a distant invariant. 'mkSpan' is still the one used, so a
++-- future tightening of its validation is not silently bypassed here.
++mkSpanNonNegative :: Int -> Int -> Either SrcSpanConvError Span
++mkSpanNonNegative s len = either (const (Left NegativeSpanLength)) Right (mkSpan (max 0 s) (max 0 len))
+diff --git a/src/Tadka/Internal/Renderer/Graphical.hs b/src/Tadka/Internal/Renderer/Graphical.hs
+index 574bcfb..ddc174f 100644
+--- a/src/Tadka/Internal/Renderer/Graphical.hs
++++ b/src/Tadka/Internal/Renderer/Graphical.hs
+@@ -215,12 +215,20 @@ renderRoot opts sd@(SomeDiagnostic e) =
+     snip     = snippetLines glyphs (severity e) cmode (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
+     trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
+                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
+-                 ++ causeLines
++                 ++ causeLinesFor opts cmode glyphs eqIndent sd
+                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
+-    causeLines = [ eqIndent <> "= caused by: " <> summaryOf cmode glyphs c
+-                 | c <- walkCauses (goRelatedDepth opts) sd ]
+     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
+ 
++-- | The "= caused by: ..." lines for a diagnostic's own 'diagnosticCause'
++-- chain, indented to the given column. Shared by 'renderRoot' and every
++-- 'relatedChild' so a diagnostic's causes render identically regardless of
++-- where in the report it appears: a related diagnostic's cause chain is not
++-- a second-class citizen relative to the root's.
++causeLinesFor :: GraphicalOptions -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
++causeLinesFor opts cmode glyphs indent sd =
++  [ indent <> "= caused by: " <> summaryOf cmode glyphs c
++  | c <- walkCauses (goRelatedDepth opts) sd ]
++
+ -- === Header ===============================================================
+ 
+ headerLine :: ColorMode -> Severity -> Maybe DiagnosticCode -> Text -> Text
+@@ -382,15 +390,19 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
+     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
+     _ ->
+         (indent <> "= related: " <> summaryOf (goColorMode opts) glyphs childDiag)
+-      : map (nest <>) (childSnippet ++ childSep ++ childRelated)
++      : map (nest <>) (childSnippet ++ childSep ++ childCauses ++ childRelated)
+   where
+-    nest       = "  "
+-    childGw    = withDiag childDiag (gutterWidth . context)
++    nest        = "  "
++    childGw     = withDiag childDiag (gutterWidth . context)
++    childIndent = T.replicate (childGw + 1) " "
+     childSnippet = withDiag childDiag
+       (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
+-    childRelated = relatedForest opts glyphs childGw (T.replicate (childGw + 1) " ") node
+-    childSep     = [T.replicate (childGw + 1) " " <> gRail glyphs
+-                   | not (null childSnippet) && not (null childRelated)]
++    -- Same call, same shape, as 'renderRoot': a related diagnostic's own
++    -- "caused by" chain renders exactly as the root's would, just nested.
++    childCauses  = causeLinesFor opts (goColorMode opts) glyphs childIndent childDiag
++    childRelated = relatedForest opts glyphs childGw childIndent node
++    childSep     = [childIndent <> gRail glyphs
++                   | not (null childSnippet) && not (null (childCauses ++ childRelated))]
+ 
+ summaryOf :: ColorMode -> Glyphs -> SomeDiagnostic -> Text
+ summaryOf cmode glyphs (SomeDiagnostic e) =
+diff --git a/src/Tadka/Internal/Renderer/Json.hs b/src/Tadka/Internal/Renderer/Json.hs
+index 4f51cfc..589ac59 100644
+--- a/src/Tadka/Internal/Renderer/Json.hs
++++ b/src/Tadka/Internal/Renderer/Json.hs
+@@ -119,17 +119,21 @@ instance ToJSON DiagnosticDTO where
+ 
+ -- | Convert a Phase 3 walk tree into a DTO. Cycle-marker children become the
+ -- @cycleOmitted@ flag (not nested entries); depth-truncation becomes
+--- @truncated@ on the node whose children were cut.
+-toDTO :: RelatedTree -> DiagnosticDTO
+-toDTO (RelatedTree (SomeDiagnostic e) children term) = DiagnosticDTO
++-- @truncated@ on the node whose children were cut. The same 'depth' budget
++-- used to build the 'related' tree also bounds each node's own 'causes'
++-- chain — one recursive definition, applied uniformly to the root and to
++-- every related diagnostic, so a node's causes never depend on whether it
++-- happens to be the one the caller started from.
++toDTO :: Natural -> RelatedTree -> DiagnosticDTO
++toDTO depth (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
+   { dtoCode         = unDiagnosticCode <$> code e
+   , dtoSeverity     = severityJsonTag (severity e)
+   , dtoMessage      = docToText (message e)
+   , dtoLabels       = labelsDTO (context e)
+   , dtoHelp         = docToText <$> help e
+   , dtoUrl          = unUrl <$> url e
+-  , dtoRelated      = [ toDTO c | c <- children, not (isCycle c) ]
+-  , dtoCauses       = []
++  , dtoRelated      = [ toDTO depth c | c <- children, not (isCycle c) ]
++  , dtoCauses       = map causeDTO (walkCauses depth sd)
+   , dtoTruncated    = term == DepthTruncated
+   , dtoCycleOmitted = any isCycle children
+   }
+@@ -157,12 +161,10 @@ labelsDTO = concatMap groupLabels . contextSourceGroups
+       }
+ 
+ renderJson :: Diagnostic e => JsonOptions -> e -> Value
+-renderJson opts e =
+-  toJSON (dto { dtoCauses = map causeDTO (walkCauses depth root) })
++renderJson opts e = toJSON (toDTO depth (walkRelated depth root))
+   where
+     root  = SomeDiagnostic e
+     depth = joRelatedDepth opts
+-    dto   = toDTO (walkRelated depth root)
+ 
+ causeDTO :: SomeDiagnostic -> CauseDTO
+ causeDTO (SomeDiagnostic e) = CauseDTO (unDiagnosticCode <$> code e) (docToText (message e))
+diff --git a/src/Tadka/Internal/Renderer/Narratable.hs b/src/Tadka/Internal/Renderer/Narratable.hs
+index f0e208e..60652f9 100644
+--- a/src/Tadka/Internal/Renderer/Narratable.hs
++++ b/src/Tadka/Internal/Renderer/Narratable.hs
+@@ -73,7 +73,7 @@ renderProse opts sd@(SomeDiagnostic e) =
+    : contextSentences (context e)
+   ++ helpSentences (fmap docToProse (help e)) (fmap unUrl (url e))
+   ++ causeSentences (walkCauses (noRelatedDepth opts) sd)
+-  ++ relatedSentences (walkRelated (noRelatedDepth opts) sd)
++  ++ relatedSentences opts (walkRelated (noRelatedDepth opts) sd)
+ 
+ -- === Header ===============================================================
+ 
+@@ -143,17 +143,20 @@ helpSentences mhelp murl =
+ 
+ -- === Related ==============================================================
+ 
+-relatedSentences :: RelatedTree -> [Text]
+-relatedSentences (RelatedTree rootDiag children term) =
+-     concatMap relatedChild children
++relatedSentences :: NarratableOptions -> RelatedTree -> [Text]
++relatedSentences opts (RelatedTree rootDiag children term) =
++     concatMap (relatedChild opts) children
+   ++ truncationNote term (numRelated rootDiag)
+ 
+-relatedChild :: RelatedTree -> [Text]
+-relatedChild (RelatedTree childDiag kids term) = case term of
++relatedChild :: NarratableOptions -> RelatedTree -> [Text]
++relatedChild opts (RelatedTree childDiag kids term) = case term of
+   CycleOmitted -> [ "A related diagnostic was omitted because it forms a cycle." ]
+   _ ->
+        ("Related: " <> summaryProse childDiag <> ".")
+-     : concatMap relatedChild kids
++       -- Same call, same shape, as 'renderProse': a related diagnostic's own
++       -- cause chain reads exactly as the root's would, just nested here.
++     : causeSentences (walkCauses (noRelatedDepth opts) childDiag)
++    ++ concatMap (relatedChild opts) kids
+     ++ truncationNote term (numRelated childDiag)
+ 
+ truncationNote :: TerminationReason -> Int -> [Text]
+diff --git a/src/Tadka/Internal/TH.hs b/src/Tadka/Internal/TH.hs
+index 681f38d..66318eb 100644
+--- a/src/Tadka/Internal/TH.hs
++++ b/src/Tadka/Internal/TH.hs
+@@ -16,6 +16,7 @@ module Tadka.Internal.TH
+   , deriveDiagnostic
+   ) where
+ 
++import           Data.List                  (intercalate)
+ import           Data.Maybe                 (catMaybes)
+ import           Data.Text                  (Text, pack, unpack)
+ import           Language.Haskell.TH
+@@ -96,6 +97,14 @@ deriveDiagnostic spec tyName = do
+   -- The default message needs Show.
+   requireShowIfDefaultMessage spec tyName
+ 
++  -- A label with no source field is not a smaller feature, it is a dropped
++  -- one: 'contextMethod' can only emit a 'context' method when it has a
++  -- source to anchor labels to, so with no 'specSourceField' it emits no
++  -- method at all and every label below silently falls back to the class
++  -- default ('NoContext') instead of failing loudly. Reject that combination
++  -- here, at the one call site that already owns "malformed spec, fail now".
++  requireSourceFieldForLabels spec tyName
++
+   methods <- fmap catMaybes . sequence $
+     [ Just <$> messageMethod spec
+     , codeMethod (specCode spec)
+@@ -202,6 +211,37 @@ requireShowIfDefaultMessage spec tyName = case specMessage spec of
+           else fail (nameBase tyName ++ ": the default message needs a Show instance"
+                        ++ " (add `deriving Show`, or set specMessage)")
+ 
++-- | 'contextMethod' below only produces a @context@ method when it is given
++-- a 'specSourceField'; with none, it produces nothing at all, and the
++-- generated instance falls back to the 'Diagnostic' class default
++-- (@context _ = NoContext@) regardless of how many label fields the spec
++-- names. That fallback is correct for a spec with no labels at all, and
++-- wrong for one with labels and no source: every label reference the author
++-- wrote would be compiled, accepted, and then never consulted. So this is
++-- the one precondition 'contextMethod' cannot check for itself (by the time
++-- it pattern-matches on @Nothing@, the label lists are already out of
++-- scope) and must instead be enforced here, alongside the spec's other
++-- "fail now or silently misbehave later" checks.
++requireSourceFieldForLabels :: DiagnosticSpec -> Name -> Q ()
++requireSourceFieldForLabels spec tyName = case specSourceField spec of
++  Just _  -> pure ()
++  Nothing
++    | null allLabelFieldNames -> pure ()
++    | otherwise -> fail
++        (nameBase tyName ++ ": specLabelFields/specSecondaryLabelFields/"
++          ++ "specLabelCollectionFields/specSecondaryLabelCollectionFields "
++          ++ "name a field (" ++ intercalate ", " (map nameBase allLabelFieldNames)
++          ++ ") but specSourceField is Nothing, so no `context` method would "
++          ++ "be generated at all and every one of those labels would be "
++          ++ "silently dropped. Set specSourceField to the record's "
++          ++ "NamedSource field, or remove the label fields.")
++  where
++    allLabelFieldNames =
++         map fst (specLabelFields spec)
++      ++ map fst (specSecondaryLabelFields spec)
++      ++ map fst (specLabelCollectionFields spec)
++      ++ map fst (specSecondaryLabelCollectionFields spec)
++
+ -- === Method generators (each body is a direct call to a shared function) ===
+ 
+ messageMethod :: DiagnosticSpec -> Q Dec
+diff --git a/test/compile-fail/LabelsWithoutSource.hs b/test/compile-fail/LabelsWithoutSource.hs
+new file mode 100644
+index 0000000..de07c40
+--- /dev/null
++++ b/test/compile-fail/LabelsWithoutSource.hs
+@@ -0,0 +1,9 @@
++{-# LANGUAGE OverloadedStrings #-}
++{-# LANGUAGE TemplateHaskell #-}
++module LabelsWithoutSource where
++import Tadka
++data E = E { at :: Span } deriving (Show)
++-- specLabelFields names a field, but specSourceField is Nothing: with no
++-- source to anchor to, contextMethod would emit no `context` method at all
++-- and 'at' would be silently dropped rather than rejected.
++deriveDiagnostic defaultSpec { specLabelFields = [('at, "here")] } ''E
+diff --git a/test/interop/Main.hs b/test/interop/Main.hs
+index 441dc59..f337a90 100644
+--- a/test/interop/Main.hs
++++ b/test/interop/Main.hs
+@@ -16,7 +16,8 @@ import qualified Data.Attoparsec.Text      as A
+ import qualified GHC.Data.Strict            as Strict
+ import           GHC.Data.FastString        (fsLit)
+ import           GHC.Types.SrcLoc          (SrcSpan (..), mkRealSrcLoc, mkRealSrcSpan,
+-                                            srcSpanStartCol, srcSpanStartLine)
++                                            srcSpanEndCol, srcSpanEndLine, srcSpanStartCol,
++                                            srcSpanStartLine)
+ import qualified Data.List.NonEmpty         as NE
+ import           Text.Megaparsec           (Parsec, attachSourcePos, bundleErrors,
+                                             bundlePosState, runParser)
+@@ -26,7 +27,7 @@ import           Text.Megaparsec.Pos       (sourceColumn, sourceLine, unPos)
+ 
+ import           Tadka
+ import           Tadka.Interop.Attoparsec  (consumedOffset)
+-import           Tadka.Interop.GHC         (spanFromSrcSpan)
++import           Tadka.Interop.GHC         (SrcSpanConvError (..), spanFromSrcSpan)
+ import           Tadka.Interop.Megaparsec  (spanFromError)
+ 
+ rightOrErr :: Show a => Either a b -> b
+@@ -50,6 +51,17 @@ ghcCheck =
+       ghc  = (srcSpanStartLine rss, srcSpanStartCol rss)
+   in ("ghc SrcSpan line/col round-trips", mine == ghc && mine == (2, 3))
+ 
++-- A span whose start resolves but whose end is out of bounds must name the
++-- END position in the error, not fall back to reporting the start.
++ghcEndAttributionCheck :: (String, Bool)
++ghcEndAttributionCheck =
++  let src = "aaaa\nbbbbbb\ncccc\n"
++      rss = mkRealSrcSpan (mkRealSrcLoc (fsLit "f.hs") 2 3) (mkRealSrcLoc (fsLit "f.hs") 99 1)
++      ss  = RealSrcSpan rss Strict.Nothing
++  in ( "ghc SrcSpan out-of-bounds end is attributed to the end, not the start"
++     , spanFromSrcSpan src ss == Left (LineColOutOfBounds (srcSpanEndLine rss) (srcSpanEndCol rss))
++     )
++
+ -- === megaparsec ============================================================
+ type P = Parsec Void Text
+ 
+@@ -86,7 +98,7 @@ attoCheck =
+ 
+ main :: IO ()
+ main = do
+-  let checks = [ghcCheck, megaCheck, attoCheck]
++  let checks = [ghcCheck, ghcEndAttributionCheck, megaCheck, attoCheck]
+   results <- mapM report checks
+   unless (and results) exitFailure
+   where
+diff --git a/test/props/Cause.hs b/test/props/Cause.hs
+index b3deaa2..80088fc 100644
+--- a/test/props/Cause.hs
++++ b/test/props/Cause.hs
+@@ -73,6 +73,30 @@ prop_causedByAppears = withTests 1 . property $ do
+   assert ("caused by" `T.isInfixOf` renderT TGraphical rooted)
+   assert ("Caused by" `T.isInfixOf` renderT TNarratable rooted)
+ 
++-- A *related* diagnostic with its own, distinct cause: the cause must render
++-- wherever the related diagnostic itself renders, not only at the root. Each
++-- renderer's related-child path is expected to call the exact same
++-- cause-rendering function the root does (Graphical: 'causeLinesFor';
++-- Narratable: 'causeSentences'; Json: 'toDTO's own recursive 'dtoCauses'),
++-- so this exercises that shared path one level down instead of at the root.
++relatedLeafCause :: GD
++relatedLeafCause = GD ("relative's own root cause " <> marker) Nothing NoContext Nothing Nothing []
++                      (Just (mkDiagnosticId "relatedLeafCause")) Nothing
++
++relatedWithOwnCause :: GD
++relatedWithOwnCause = GD "a related diagnostic" Nothing NoContext Nothing Nothing []
++                         (Just (mkDiagnosticId "relatedWithOwnCause")) (Just (SomeDiagnostic relatedLeafCause))
++
++rootWithRelatedCause :: GD
++rootWithRelatedCause = GD "top-level failure" Nothing NoContext Nothing Nothing
++                           [SomeDiagnostic relatedWithOwnCause]
++                           (Just (mkDiagnosticId "rootWithRelatedCause")) Nothing
++
++prop_causedByAppearsForRelated :: Property
++prop_causedByAppearsForRelated = withTests 1 . property $
++  mapM_ (\tgt -> assert (marker `T.isInfixOf` renderT tgt rootWithRelatedCause))
++        [TGraphical, TNarratable, TJson]
++
+ -- === specCause: derive == manual ==========================================
+ 
+ rightOrErr :: Show a => Either a b -> b
+@@ -115,5 +139,6 @@ group = Group "Cause chain"
+   [ ("cyclic cause chains render (every target)", prop_cyclicTerminates)
+   , ("id-cyclic cause marker renders at most once", prop_markerAtMostOnce)
+   , ("a cause chain renders a 'caused by' line",  prop_causedByAppears)
++  , ("a related diagnostic's own cause also renders, not just the root's", prop_causedByAppearsForRelated)
+   , ("derived specCause == manual diagnosticCause, all handlers", prop_deriveCauseEqualsManual)
+   ]
+diff --git a/test/props/Labels.hs b/test/props/Labels.hs
+index c3dde72..c8f616b 100644
+--- a/test/props/Labels.hs
++++ b/test/props/Labels.hs
+@@ -83,7 +83,7 @@ prop_glyphsSameKindDistinct = withTests 1 . property $ do
+ 
+ prop_jsonFlag :: Property
+ prop_jsonFlag = withTests 1 . property $ do
+-  let labels = dtoLabels (toDTO (walkRelated 8 (SomeDiagnostic KindDiag)))
++  let labels = dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic KindDiag)))
+   map ldPrimary labels === [False, True]        -- secondary first, primary second
+ 
+ -- === derive (with secondary) == manual ====================================
+diff --git a/test/props/Phase7.hs b/test/props/Phase7.hs
+index ef00c19..5adbd85 100644
+--- a/test/props/Phase7.hs
++++ b/test/props/Phase7.hs
+@@ -39,7 +39,7 @@ rightOrErr = either (error . show) id
+ -- Build a one-label DTO for a diagnostic with the given span over "abcdef".
+ labelOf :: Int -> Int -> LabelDTO
+ labelOf off len =
+-  case dtoLabels (toDTO (walkRelated 8 (SomeDiagnostic d))) of
++  case dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic d))) of
+     (l:_) -> l
+     []    -> error "labelOf: expected exactly one label"
+   where
+diff --git a/tools/check-compile-fail.sh b/tools/check-compile-fail.sh
+index b6d2ecc..41911c9 100755
+--- a/tools/check-compile-fail.sh
++++ b/tools/check-compile-fail.sh
+@@ -28,4 +28,5 @@ check WrongCollectionType "specLabelCollectionFields"
+   check TwoSources "exactly one NamedSource field"
+   check SuccessCriterion "specLabelFields"
+   check WrongCauseType "specCause"
++check LabelsWithoutSource "specSourceField is Nothing"
+ [ "$fail" -eq 0 ] && echo "check-compile-fail: OK" || { echo "check-compile-fail: FAILED"; exit 1; }

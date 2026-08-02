@@ -215,11 +215,19 @@ renderRoot opts sd@(SomeDiagnostic e) =
     snip     = snippetLines glyphs (severity e) cmode (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
     trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
-                 ++ causeLines
+                 ++ causeLinesFor opts cmode glyphs eqIndent sd
                  ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
-    causeLines = [ eqIndent <> "= caused by: " <> summaryOf cmode glyphs c
-                 | c <- walkCauses (goRelatedDepth opts) sd ]
     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
+
+-- | The "= caused by: ..." lines for a diagnostic's own 'diagnosticCause'
+-- chain, indented to the given column. Shared by 'renderRoot' and every
+-- 'relatedChild' so a diagnostic's causes render identically regardless of
+-- where in the report it appears: a related diagnostic's cause chain is not
+-- a second-class citizen relative to the root's.
+causeLinesFor :: GraphicalOptions -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
+causeLinesFor opts cmode glyphs indent sd =
+  [ indent <> "= caused by: " <> summaryOf cmode glyphs c
+  | c <- walkCauses (goRelatedDepth opts) sd ]
 
 -- === Header ===============================================================
 
@@ -382,15 +390,19 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
     _ ->
         (indent <> "= related: " <> summaryOf (goColorMode opts) glyphs childDiag)
-      : map (nest <>) (childSnippet ++ childSep ++ childRelated)
+      : map (nest <>) (childSnippet ++ childSep ++ childCauses ++ childRelated)
   where
-    nest       = "  "
-    childGw    = withDiag childDiag (gutterWidth . context)
+    nest        = "  "
+    childGw     = withDiag childDiag (gutterWidth . context)
+    childIndent = T.replicate (childGw + 1) " "
     childSnippet = withDiag childDiag
       (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
-    childRelated = relatedForest opts glyphs childGw (T.replicate (childGw + 1) " ") node
-    childSep     = [T.replicate (childGw + 1) " " <> gRail glyphs
-                   | not (null childSnippet) && not (null childRelated)]
+    -- Same call, same shape, as 'renderRoot': a related diagnostic's own
+    -- "caused by" chain renders exactly as the root's would, just nested.
+    childCauses  = causeLinesFor opts (goColorMode opts) glyphs childIndent childDiag
+    childRelated = relatedForest opts glyphs childGw childIndent node
+    childSep     = [childIndent <> gRail glyphs
+                   | not (null childSnippet) && not (null (childCauses ++ childRelated))]
 
 summaryOf :: ColorMode -> Glyphs -> SomeDiagnostic -> Text
 summaryOf cmode glyphs (SomeDiagnostic e) =

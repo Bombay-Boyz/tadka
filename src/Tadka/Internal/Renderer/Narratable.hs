@@ -73,7 +73,7 @@ renderProse opts sd@(SomeDiagnostic e) =
    : contextSentences (context e)
   ++ helpSentences (fmap docToProse (help e)) (fmap unUrl (url e))
   ++ causeSentences (walkCauses (noRelatedDepth opts) sd)
-  ++ relatedSentences (walkRelated (noRelatedDepth opts) sd)
+  ++ relatedSentences opts (walkRelated (noRelatedDepth opts) sd)
 
 -- === Header ===============================================================
 
@@ -143,17 +143,20 @@ helpSentences mhelp murl =
 
 -- === Related ==============================================================
 
-relatedSentences :: RelatedTree -> [Text]
-relatedSentences (RelatedTree rootDiag children term) =
-     concatMap relatedChild children
+relatedSentences :: NarratableOptions -> RelatedTree -> [Text]
+relatedSentences opts (RelatedTree rootDiag children term) =
+     concatMap (relatedChild opts) children
   ++ truncationNote term (numRelated rootDiag)
 
-relatedChild :: RelatedTree -> [Text]
-relatedChild (RelatedTree childDiag kids term) = case term of
+relatedChild :: NarratableOptions -> RelatedTree -> [Text]
+relatedChild opts (RelatedTree childDiag kids term) = case term of
   CycleOmitted -> [ "A related diagnostic was omitted because it forms a cycle." ]
   _ ->
        ("Related: " <> summaryProse childDiag <> ".")
-     : concatMap relatedChild kids
+       -- Same call, same shape, as 'renderProse': a related diagnostic's own
+       -- cause chain reads exactly as the root's would, just nested here.
+     : causeSentences (walkCauses (noRelatedDepth opts) childDiag)
+    ++ concatMap (relatedChild opts) kids
     ++ truncationNote term (numRelated childDiag)
 
 truncationNote :: TerminationReason -> Int -> [Text]
