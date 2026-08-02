@@ -57,12 +57,29 @@ offsetFromLineCol src line col = do
 
 -- | Convert a GHC 'SrcSpan' to a tadka 'Span', given the source text (needed to
 -- turn GHC's 1-based line/column into a character offset and length).
+--
+-- The four-way case split below is exhaustive over which of the two
+-- endpoints resolved: both, only the start, only the end, or neither. Each
+-- arm names the specific endpoint at fault rather than defaulting to the
+-- start, so 'LineColOutOfBounds' always describes the position that was
+-- actually out of bounds.
 spanFromSrcSpan :: Text -> SrcSpan -> Either SrcSpanConvError Span
 spanFromSrcSpan _   (UnhelpfulSpan _) = Left UnhelpfulSrcSpan
 spanFromSrcSpan src (RealSrcSpan rss _) =
   case (offsetFromLineCol src (srcSpanStartLine rss) (srcSpanStartCol rss),
         offsetFromLineCol src (srcSpanEndLine rss)   (srcSpanEndCol rss)) of
+    (Nothing, _) -> Left (LineColOutOfBounds (srcSpanStartLine rss) (srcSpanStartCol rss))
+    (_, Nothing) -> Left (LineColOutOfBounds (srcSpanEndLine rss)   (srcSpanEndCol rss))
     (Just s, Just e)
-      | e >= s    -> either (const (Left NegativeSpanLength)) Right (mkSpan s (e - s))
+      | e >= s    -> mkSpanNonNegative s (e - s)
       | otherwise -> Left NegativeSpanLength
-    _ -> Left (LineColOutOfBounds (srcSpanStartLine rss) (srcSpanStartCol rss))
+
+-- | 'mkSpan', specialised to a call site where both arguments are already
+-- non-negative by construction (`max 0` is a no-op on them): 'mkSpan' can
+-- only fail on a negative offset or a negative length, so with both clamped
+-- here — not merely reasoned to be non-negative three functions away in
+-- 'offsetFromLineCol' — its 'Left' case is unreachable by local inspection,
+-- not by trusting a distant invariant. 'mkSpan' is still the one used, so a
+-- future tightening of its validation is not silently bypassed here.
+mkSpanNonNegative :: Int -> Int -> Either SrcSpanConvError Span
+mkSpanNonNegative s len = either (const (Left NegativeSpanLength)) Right (mkSpan (max 0 s) (max 0 len))

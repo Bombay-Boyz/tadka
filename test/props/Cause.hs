@@ -73,6 +73,30 @@ prop_causedByAppears = withTests 1 . property $ do
   assert ("caused by" `T.isInfixOf` renderT TGraphical rooted)
   assert ("Caused by" `T.isInfixOf` renderT TNarratable rooted)
 
+-- A *related* diagnostic with its own, distinct cause: the cause must render
+-- wherever the related diagnostic itself renders, not only at the root. Each
+-- renderer's related-child path is expected to call the exact same
+-- cause-rendering function the root does (Graphical: 'causeLinesFor';
+-- Narratable: 'causeSentences'; Json: 'toDTO's own recursive 'dtoCauses'),
+-- so this exercises that shared path one level down instead of at the root.
+relatedLeafCause :: GD
+relatedLeafCause = GD ("relative's own root cause " <> marker) Nothing NoContext Nothing Nothing []
+                      (Just (mkDiagnosticId "relatedLeafCause")) Nothing
+
+relatedWithOwnCause :: GD
+relatedWithOwnCause = GD "a related diagnostic" Nothing NoContext Nothing Nothing []
+                         (Just (mkDiagnosticId "relatedWithOwnCause")) (Just (SomeDiagnostic relatedLeafCause))
+
+rootWithRelatedCause :: GD
+rootWithRelatedCause = GD "top-level failure" Nothing NoContext Nothing Nothing
+                           [SomeDiagnostic relatedWithOwnCause]
+                           (Just (mkDiagnosticId "rootWithRelatedCause")) Nothing
+
+prop_causedByAppearsForRelated :: Property
+prop_causedByAppearsForRelated = withTests 1 . property $
+  mapM_ (\tgt -> assert (marker `T.isInfixOf` renderT tgt rootWithRelatedCause))
+        [TGraphical, TNarratable, TJson]
+
 -- === specCause: derive == manual ==========================================
 
 rightOrErr :: Show a => Either a b -> b
@@ -115,5 +139,6 @@ group = Group "Cause chain"
   [ ("cyclic cause chains render (every target)", prop_cyclicTerminates)
   , ("id-cyclic cause marker renders at most once", prop_markerAtMostOnce)
   , ("a cause chain renders a 'caused by' line",  prop_causedByAppears)
+  , ("a related diagnostic's own cause also renders, not just the root's", prop_causedByAppearsForRelated)
   , ("derived specCause == manual diagnosticCause, all handlers", prop_deriveCauseEqualsManual)
   ]

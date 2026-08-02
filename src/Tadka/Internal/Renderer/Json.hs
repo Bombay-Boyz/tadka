@@ -119,17 +119,21 @@ instance ToJSON DiagnosticDTO where
 
 -- | Convert a Phase 3 walk tree into a DTO. Cycle-marker children become the
 -- @cycleOmitted@ flag (not nested entries); depth-truncation becomes
--- @truncated@ on the node whose children were cut.
-toDTO :: RelatedTree -> DiagnosticDTO
-toDTO (RelatedTree (SomeDiagnostic e) children term) = DiagnosticDTO
+-- @truncated@ on the node whose children were cut. The same 'depth' budget
+-- used to build the 'related' tree also bounds each node's own 'causes'
+-- chain — one recursive definition, applied uniformly to the root and to
+-- every related diagnostic, so a node's causes never depend on whether it
+-- happens to be the one the caller started from.
+toDTO :: Natural -> RelatedTree -> DiagnosticDTO
+toDTO depth (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
   { dtoCode         = unDiagnosticCode <$> code e
   , dtoSeverity     = severityJsonTag (severity e)
   , dtoMessage      = docToText (message e)
   , dtoLabels       = labelsDTO (context e)
   , dtoHelp         = docToText <$> help e
   , dtoUrl          = unUrl <$> url e
-  , dtoRelated      = [ toDTO c | c <- children, not (isCycle c) ]
-  , dtoCauses       = []
+  , dtoRelated      = [ toDTO depth c | c <- children, not (isCycle c) ]
+  , dtoCauses       = map causeDTO (walkCauses depth sd)
   , dtoTruncated    = term == DepthTruncated
   , dtoCycleOmitted = any isCycle children
   }
@@ -157,12 +161,10 @@ labelsDTO = concatMap groupLabels . contextSourceGroups
       }
 
 renderJson :: Diagnostic e => JsonOptions -> e -> Value
-renderJson opts e =
-  toJSON (dto { dtoCauses = map causeDTO (walkCauses depth root) })
+renderJson opts e = toJSON (toDTO depth (walkRelated depth root))
   where
     root  = SomeDiagnostic e
     depth = joRelatedDepth opts
-    dto   = toDTO (walkRelated depth root)
 
 causeDTO :: SomeDiagnostic -> CauseDTO
 causeDTO (SomeDiagnostic e) = CauseDTO (unDiagnosticCode <$> code e) (docToText (message e))

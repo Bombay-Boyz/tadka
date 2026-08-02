@@ -16,6 +16,7 @@ module Tadka.Internal.TH
   , deriveDiagnostic
   ) where
 
+import           Data.List                  (intercalate)
 import           Data.Maybe                 (catMaybes)
 import           Data.Text                  (Text, pack, unpack)
 import           Language.Haskell.TH
@@ -95,6 +96,14 @@ deriveDiagnostic spec tyName = do
 
   -- The default message needs Show.
   requireShowIfDefaultMessage spec tyName
+
+  -- A label with no source field is not a smaller feature, it is a dropped
+  -- one: 'contextMethod' can only emit a 'context' method when it has a
+  -- source to anchor labels to, so with no 'specSourceField' it emits no
+  -- method at all and every label below silently falls back to the class
+  -- default ('NoContext') instead of failing loudly. Reject that combination
+  -- here, at the one call site that already owns "malformed spec, fail now".
+  requireSourceFieldForLabels spec tyName
 
   methods <- fmap catMaybes . sequence $
     [ Just <$> messageMethod spec
@@ -201,6 +210,37 @@ requireShowIfDefaultMessage spec tyName = case specMessage spec of
     if ok then pure ()
           else fail (nameBase tyName ++ ": the default message needs a Show instance"
                        ++ " (add `deriving Show`, or set specMessage)")
+
+-- | 'contextMethod' below only produces a @context@ method when it is given
+-- a 'specSourceField'; with none, it produces nothing at all, and the
+-- generated instance falls back to the 'Diagnostic' class default
+-- (@context _ = NoContext@) regardless of how many label fields the spec
+-- names. That fallback is correct for a spec with no labels at all, and
+-- wrong for one with labels and no source: every label reference the author
+-- wrote would be compiled, accepted, and then never consulted. So this is
+-- the one precondition 'contextMethod' cannot check for itself (by the time
+-- it pattern-matches on @Nothing@, the label lists are already out of
+-- scope) and must instead be enforced here, alongside the spec's other
+-- "fail now or silently misbehave later" checks.
+requireSourceFieldForLabels :: DiagnosticSpec -> Name -> Q ()
+requireSourceFieldForLabels spec tyName = case specSourceField spec of
+  Just _  -> pure ()
+  Nothing
+    | null allLabelFieldNames -> pure ()
+    | otherwise -> fail
+        (nameBase tyName ++ ": specLabelFields/specSecondaryLabelFields/"
+          ++ "specLabelCollectionFields/specSecondaryLabelCollectionFields "
+          ++ "name a field (" ++ intercalate ", " (map nameBase allLabelFieldNames)
+          ++ ") but specSourceField is Nothing, so no `context` method would "
+          ++ "be generated at all and every one of those labels would be "
+          ++ "silently dropped. Set specSourceField to the record's "
+          ++ "NamedSource field, or remove the label fields.")
+  where
+    allLabelFieldNames =
+         map fst (specLabelFields spec)
+      ++ map fst (specSecondaryLabelFields spec)
+      ++ map fst (specLabelCollectionFields spec)
+      ++ map fst (specSecondaryLabelCollectionFields spec)
 
 -- === Method generators (each body is a direct call to a shared function) ===
 

@@ -39,7 +39,7 @@ rightOrErr = either (error . show) id
 -- Build a one-label DTO for a diagnostic with the given span over "abcdef".
 labelOf :: Int -> Int -> LabelDTO
 labelOf off len =
-  case dtoLabels (toDTO (walkRelated 8 (SomeDiagnostic d))) of
+  case dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic d))) of
     (l:_) -> l
     []    -> error "labelOf: expected exactly one label"
   where

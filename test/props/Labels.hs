@@ -83,7 +83,7 @@ prop_glyphsSameKindDistinct = withTests 1 . property $ do
 
 prop_jsonFlag :: Property
 prop_jsonFlag = withTests 1 . property $ do
-  let labels = dtoLabels (toDTO (walkRelated 8 (SomeDiagnostic KindDiag)))
+  let labels = dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic KindDiag)))
   map ldPrimary labels === [False, True]        -- secondary first, primary second
 
 -- === derive (with secondary) == manual ====================================
