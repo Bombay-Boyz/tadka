@@ -136,6 +136,7 @@ test-suite props
                     Phase9
                     Phase11
                     Phase12
+                    Phase13
                     Tabs
                     TermColor
                     Hyperlink

@@ -14,9 +14,12 @@ module Tadka.Internal.TH
   ( DiagnosticSpec (..)
   , defaultSpec
   , deriveDiagnostic
+  , DiagnosticSumSpec
+  , deriveDiagnosticSum
   ) where
 
-import           Data.List                  (intercalate)
+import           Control.Monad              (forM)
+import           Data.List                  (intercalate, nub, (\\))
 import           Data.Maybe                 (catMaybes)
 import           Data.Text                  (Text, pack, unpack)
 import           Language.Haskell.TH
@@ -24,7 +27,7 @@ import           Prettyprinter              (pretty)
 
 import           Tadka.Internal             (buildContext, buildContextWith,
                                              unsafeDiagnosticCode, unsafeUrl)
-import           Tadka.Internal.Context     (LabelKind (..))
+import           Tadka.Internal.Context     (Context (NoContext), LabelKind (..))
 import           Tadka.Internal.Diagnostic  (Diagnostic (..), SomeDiagnostic)
 import           Tadka.Internal.Span        (Span, SpanF)
 import           Tadka.Internal.Types       (DiagnosticId, NamedSource, Severity (..),
@@ -77,7 +80,32 @@ data IdKind = IdText | IdDiag
 deriveDiagnostic :: DiagnosticSpec -> Name -> Q [Dec]
 deriveDiagnostic spec tyName = do
   fields <- reifyRecordFields tyName
+  idInfo <- validateSpecAgainstFields tyName fields spec
 
+  methods <- fmap catMaybes . sequence $
+    [ Just <$> messageMethod spec
+    , codeMethod (specCode spec)
+    , Just <$> severityMethod (specSeverity spec)
+    , helpMethod (specHelp spec)
+    , urlMethod (specUrl spec)
+    , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
+                    (specLabelCollectionFields spec) (specSecondaryLabelCollectionFields spec)
+    , relatedMethod (specRelated spec)
+    , causeMethod (specCause spec)
+    , diagIdMethod idInfo
+    ]
+
+  inst <- instanceD (pure []) [t| Diagnostic $(conT tyName) |] (map pure methods)
+  pure [inst]
+
+-- | Every field-reference/literal/precondition check a 'DiagnosticSpec'
+-- needs, run against one constructor's field list. Shared between
+-- 'deriveDiagnostic' (one constructor) and 'deriveDiagnosticSum' (one call
+-- per constructor in the sum) so the two entry points can never validate
+-- differently -- pulled out unchanged from what was previously
+-- 'deriveDiagnostic''s own body.
+validateSpecAgainstFields :: Name -> [(Name, Type)] -> DiagnosticSpec -> Q (Maybe (Name, IdKind))
+validateSpecAgainstFields tyName fields spec = do
   -- Validate field references and types (compile errors on mismatch).
   mapM_ (\n -> expectHead fields n [''NamedSource] "specSourceField") (specSourceField spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specLabelFields") (specLabelFields spec)
@@ -105,21 +133,134 @@ deriveDiagnostic spec tyName = do
   -- here, at the one call site that already owns "malformed spec, fail now".
   requireSourceFieldForLabels spec tyName
 
-  methods <- fmap catMaybes . sequence $
-    [ Just <$> messageMethod spec
-    , codeMethod (specCode spec)
-    , Just <$> severityMethod (specSeverity spec)
-    , helpMethod (specHelp spec)
-    , urlMethod (specUrl spec)
-    , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
-                    (specLabelCollectionFields spec) (specSecondaryLabelCollectionFields spec)
-    , relatedMethod (specRelated spec)
-    , causeMethod (specCause spec)
-    , diagIdMethod idInfo
-    ]
+  pure idInfo
 
+-- === Sum-type (multi-constructor) derivation ==============================
+
+-- | One (constructor name, per-variant spec) entry. A sum-type spec is a
+-- list of these, one per constructor of the target type -- checked for
+-- completeness (every constructor covered, no unknown constructor named) at
+-- splice time in 'deriveDiagnosticSum'.
+type DiagnosticSumSpec = [(Name, DiagnosticSpec)]
+
+-- | Sum-type counterpart to 'deriveDiagnostic'. Generates one 'Diagnostic'
+-- instance whose every method dispatches on the value's constructor via a
+-- single top-level 'case', each arm computed by the same per-field logic
+-- 'deriveDiagnostic''s own generators use -- so a sum-type instance and
+-- 'deriveDiagnostic' on each variant standing alone produce, per arm,
+-- expressions built the identical way (proven in
+-- @test/props/Phase13.hs@ the same way Phase 8 proves it for the
+-- single-constructor path).
+deriveDiagnosticSum :: DiagnosticSumSpec -> Name -> Q [Dec]
+deriveDiagnosticSum sumSpec tyName = do
+  allCons <- reifyAllConstructors tyName
+  requireCompleteSumSpec tyName allCons sumSpec
+
+  enriched <- forM sumSpec $ \(cName, spec) -> do
+    fields <- case lookup cName allCons of
+      Just fs -> pure fs
+      Nothing -> fail (nameBase tyName ++ ": internal error: constructor " ++ nameBase cName
+                         ++ " missing from reified constructors after completeness check")
+    idInfo <- validateSpecAgainstFields tyName fields spec
+    pure (cName, spec, idInfo)
+
+  methods <- sequence
+    [ genSumMethod enriched 'message         (\e (_, spec, _)     -> messageMethodArm e spec)
+    , genSumMethod enriched 'code            (\_ (_, spec, _)     -> codeMethodArm spec)
+    , genSumMethod enriched 'severity        (\_ (_, spec, _)     -> severityMethodArm spec)
+    , genSumMethod enriched 'help            (\_ (_, spec, _)     -> helpMethodArm spec)
+    , genSumMethod enriched 'url             (\_ (_, spec, _)     -> urlMethodArm spec)
+    , genSumMethod enriched 'context         (\e (_, spec, _)     -> contextMethodArm e spec)
+    , genSumMethod enriched 'related         (\e (_, spec, _)     -> relatedMethodArm e spec)
+    , genSumMethod enriched 'diagnosticCause (\e (_, spec, _)     -> causeMethodArm e spec)
+    , genSumMethod enriched 'diagnosticId    (\e (_, _, idInfo)   -> diagIdMethodArm e idInfo)
+    ]
   inst <- instanceD (pure []) [t| Diagnostic $(conT tyName) |] (map pure methods)
   pure [inst]
+
+-- | Every constructor of the type must appear exactly once in the sum spec:
+-- not missing, not named twice, and not naming a constructor the type
+-- doesn't have. A missing constructor would silently produce an incomplete
+-- instance rather than a deliberate decision; a duplicated constructor
+-- (a plausible copy-paste mistake) is checked and reported before the
+-- missing/unknown check below, since the list-difference logic that check
+-- uses would otherwise report a duplicated-but-real constructor as
+-- "not on this type" -- a correct symptom, but a confusing diagnosis for
+-- what is actually a duplicate, not an unknown name; a typo'd constructor
+-- name is far easier to debug as a splice-time failure than as a GHC
+-- "non-exhaustive case" warning discovered at runtime.
+requireCompleteSumSpec :: Name -> [(Name, [(Name, Type)])] -> DiagnosticSumSpec -> Q ()
+requireCompleteSumSpec tyName allCons sumSpec = do
+  let declaredNames = map fst allCons
+      specNames     = map fst sumSpec
+      dupes         = nub (specNames \\ nub specNames)
+  if not (null dupes)
+    then fail (nameBase tyName ++ ": deriveDiagnosticSum spec names constructor(s) more than once: "
+                 ++ intercalate ", " (map nameBase dupes))
+    else do
+      let missing = declaredNames \\ specNames
+          unknown = specNames \\ declaredNames
+      case (missing, unknown) of
+        ([], []) -> pure ()
+        (ms, []) -> fail (nameBase tyName ++ ": deriveDiagnosticSum spec is missing constructor(s): "
+                            ++ intercalate ", " (map nameBase ms))
+        ([], us) -> fail (nameBase tyName ++ ": deriveDiagnosticSum spec names constructor(s) "
+                            ++ "not on this type: " ++ intercalate ", " (map nameBase us))
+        (ms, us) -> fail (nameBase tyName ++ ": deriveDiagnosticSum spec both is missing "
+                            ++ intercalate ", " (map nameBase ms) ++ " and names unknown "
+                            ++ intercalate ", " (map nameBase us))
+
+-- | Like 'reifyRecordFields', but for every constructor of a (possibly
+-- multi-constructor) 'data' declaration. Each result pairs a constructor's
+-- 'Name' with its record field list, in declaration order. Still requires
+-- record syntax on every constructor -- mixing record and positional
+-- constructors in one sum type is not supported, since 'DiagnosticSpec's
+-- field references are name-based.
+reifyAllConstructors :: Name -> Q [(Name, [(Name, Type)])]
+reifyAllConstructors tyName = do
+  info <- reify tyName
+  cons <- case info of
+    TyConI (DataD _ _ _ _ cs _)   -> pure cs
+    TyConI (NewtypeD _ _ _ _ c _) -> pure [c]
+    _ -> fail (nameBase tyName ++ ": deriveDiagnosticSum expects a data or newtype declaration")
+  traverse fieldsOf cons
+  where
+    fieldsOf (RecC cName vbts) = pure (cName, [(n, t) | (n, _, t) <- vbts])
+    fieldsOf con = fail (nameBase tyName ++ ": deriveDiagnosticSum needs record syntax "
+                           ++ "on every constructor (constructor " ++ conNameOf con
+                           ++ " is not a record)")
+    conNameOf (NormalC n _)     = nameBase n
+    conNameOf (RecC n _)        = nameBase n
+    conNameOf (InfixC _ n _)    = nameBase n
+    conNameOf (ForallC _ _ c)   = conNameOf c
+    conNameOf (GadtC ns _ _)    = intercalate "/" (map nameBase ns)
+    conNameOf (RecGadtC ns _ _) = intercalate "/" (map nameBase ns)
+
+-- | Build one instance method as a single top-level 'case' over the value's
+-- constructor, each arm's RHS produced by @mkArm@ from that constructor's
+-- own '(Name, DiagnosticSpec, Maybe (Name, IdKind))' entry. @mkArm@ receives
+-- the SAME bound variable ('Name') the outer 'clause' binds, so every arm's
+-- body references the one argument the whole method was called with, not a
+-- variable local to that arm.
+--
+-- A constructor whose spec doesn't set a given optional field (help, url,
+-- code, related, cause, id) still gets a real arm returning the class
+-- default expression (@Nothing@, @[]@, @NoContext@) -- every method is
+-- generated for every sum-type instance, never omitted, which keeps this
+-- function's shape uniform across all nine methods at the cost of a few
+-- bytes of always-@Nothing@ instance code for a spec that never uses a
+-- given optional field on any of its constructors.
+genSumMethod
+  :: [(Name, DiagnosticSpec, Maybe (Name, IdKind))]
+  -> Name
+  -> (Name -> (Name, DiagnosticSpec, Maybe (Name, IdKind)) -> Q Exp)
+  -> Q Dec
+genSumMethod enriched methodName mkArm = do
+  e <- newName "e"
+  arms <- forM enriched $ \entry@(cName, _, _) -> do
+    rhs <- mkArm e entry
+    pure (match (recP cName []) (normalB (pure rhs)) [])
+  funD methodName [clause [varP e] (normalB (caseE (varE e) arms)) []]
 
 -- === Reflection helpers ===================================================
 
@@ -339,3 +480,84 @@ diagIdMethod (Just (idN, kind)) = do
 
 strLit :: Text -> Q Exp
 strLit = litE . stringL . unpack
+
+-- === Sum-type arm generators (each mirrors the method generator above it,
+-- returning the VALUE for one constructor instead of a whole method Dec) ===
+
+messageMethodArm :: Name -> DiagnosticSpec -> Q Exp
+messageMethodArm e spec = case specMessage spec of
+  Just qe -> [| $(qe) $(varE e) |]
+  Nothing -> [| pretty (show $(varE e)) |]
+
+codeMethodArm :: DiagnosticSpec -> Q Exp
+codeMethodArm spec = case specCode spec of
+  Nothing -> [| Nothing |]
+  Just t  -> [| Just (unsafeDiagnosticCode (pack $(strLit t))) |]
+
+severityMethodArm :: DiagnosticSpec -> Q Exp
+severityMethodArm spec = conE (sevCon (specSeverity spec))
+  where
+    sevCon SevError   = 'SevError
+    sevCon SevWarning = 'SevWarning
+    sevCon SevAdvice  = 'SevAdvice
+
+helpMethodArm :: DiagnosticSpec -> Q Exp
+helpMethodArm spec = case specHelp spec of
+  Nothing -> [| Nothing |]
+  Just t  -> [| Just (pretty (pack $(strLit t))) |]
+
+urlMethodArm :: DiagnosticSpec -> Q Exp
+urlMethodArm spec = case specUrl spec of
+  Nothing -> [| Nothing |]
+  Just t  -> [| Just (unsafeUrl (pack $(strLit t))) |]
+
+contextMethodArm :: Name -> DiagnosticSpec -> Q Exp
+contextMethodArm e spec = case specSourceField spec of
+  Nothing -> [| NoContext |]
+  Just srcN ->
+    let primFields = specLabelFields spec
+        secFields  = specSecondaryLabelFields spec
+        primColl   = specLabelCollectionFields spec
+        secColl    = specSecondaryLabelCollectionFields spec
+    in if null secFields && null secColl
+         then
+           let single (lf, txt) = [| ($(varE lf) $(varE e), Just (pretty (pack $(strLit txt)))) |]
+               fixedList         = listE (map single primFields)
+           in if null primColl
+                then [| buildContext ($(varE srcN) $(varE e)) $(fixedList) |]
+                else
+                  let coll (lf, txt) = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                  in [| buildContext ($(varE srcN) $(varE e))
+                          ($(fixedList) ++ concat $(listE (map coll primColl))) |]
+         else
+           let single k (lf, txt) = [| ($(varE lf) $(varE e), $(k), Just (pretty (pack $(strLit txt)))) |]
+               fixedEntries       = listE (map (single [| Primary |]) primFields
+                                         ++ map (single [| Secondary |]) secFields)
+           in if null primColl && null secColl
+                then [| buildContextWith ($(varE srcN) $(varE e)) $(fixedEntries) |]
+                else
+                  let coll k (lf, txt) = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                      collEntries      = listE (map (coll [| Primary |]) primColl
+                                              ++ map (coll [| Secondary |]) secColl)
+                  in [| buildContextWith ($(varE srcN) $(varE e))
+                          ($(fixedEntries) ++ concat $(collEntries)) |]
+
+relatedMethodArm :: Name -> DiagnosticSpec -> Q Exp
+relatedMethodArm e spec = case specRelated spec of
+  Nothing -> [| [] |]
+  Just rn -> [| $(varE rn) $(varE e) |]
+
+causeMethodArm :: Name -> DiagnosticSpec -> Q Exp
+causeMethodArm e spec = case specCause spec of
+  Nothing -> [| Nothing |]
+  Just cn -> [| $(varE cn) $(varE e) |]
+
+-- | Mirrors 'diagIdMethod': the 'Name' and its validated 'IdKind' travel
+-- together, computed once by 'validateSpecAgainstFields' and threaded
+-- through 'deriveDiagnosticSum's @enriched@ list rather than re-derived per
+-- arm.
+diagIdMethodArm :: Name -> Maybe (Name, IdKind) -> Q Exp
+diagIdMethodArm _ Nothing = [| Nothing |]
+diagIdMethodArm e (Just (idN, kind)) = case kind of
+  IdText -> [| Just (mkDiagnosticId ($(varE idN) $(varE e))) |]
+  IdDiag -> [| Just ($(varE idN) $(varE e)) |]

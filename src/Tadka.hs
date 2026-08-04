@@ -84,6 +84,8 @@ module Tadka
   , DiagnosticSpec (..)
   , defaultSpec
   , deriveDiagnostic
+  , DiagnosticSumSpec
+  , deriveDiagnosticSum
     -- * Generics label-wiring (context only)
   , genericContext
     -- * Diagnostic codes
