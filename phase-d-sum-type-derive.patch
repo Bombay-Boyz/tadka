@@ -337,13 +337,28 @@ index a7895a7..ececa5d 100644
    unless (and results) exitFailure
 diff --git a/test/props/Phase13.hs b/test/props/Phase13.hs
 new file mode 100644
-index 0000000..7b5db48
+index 0000000..7b9eda4
 --- /dev/null
 +++ b/test/props/Phase13.hs
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,205 @@
 +{-# LANGUAGE GADTs #-}
 +{-# LANGUAGE OverloadedStrings #-}
 +{-# LANGUAGE TemplateHaskell #-}
++
++-- | Every constructor below needs its own source/span/message shape, so at
++-- least one field per constructor (the payload distinguishing that variant)
++-- is inherently partial: GHC's auto-generated accessor for e.g. 'tmExpected'
++-- can only be total if every constructor has a 'tmExpected' field of the
++-- same type, which isn't true of a genuinely heterogeneous sum type by
++-- definition. Shared fields ('crSrc', 'crAt') are named and typed
++-- identically across all three constructors specifically to avoid this
++-- where the shape genuinely allows it; the rest ('peId', 'tmExpected',
++-- 'tmActual', 'uvName', 'uvPrior', 'uvRelated', 'uvCause', 'uvId') cannot be
++-- shared without losing the type-level distinction the test exists to
++-- exercise, so the warning is suppressed here rather than upstream —
++-- any real 'deriveDiagnosticSum' consumer with a similarly heterogeneous
++-- sum type hits the same tradeoff and makes the same call locally.
++{-# OPTIONS_GHC -Wno-partial-fields #-}
 +
 +-- | Phase 13: 'deriveDiagnosticSum' is 'deriveDiagnostic''s multi-constructor
 +-- counterpart (vision §6, "Sum types (v6)"). Same proof obligation as Phase 8:
@@ -376,17 +391,17 @@ index 0000000..7b5db48
 +-- === Derived via deriveDiagnosticSum =======================================
 +
 +data CompileError
-+  = ParseFailure { peSrc :: NamedSource, peAt :: Span, peId :: DiagnosticId }
-+  | TypeMismatch { tmSrc :: NamedSource, tmAt :: Span, tmExpected :: Text, tmActual :: Text }
-+  | UndefinedVar { uvSrc :: NamedSource, uvAt :: Span, uvName :: Text, uvPrior :: [Span]
++  = ParseFailure { crSrc :: NamedSource, crAt :: Span, peId :: DiagnosticId }
++  | TypeMismatch { crSrc :: NamedSource, crAt :: Span, tmExpected :: Text, tmActual :: Text }
++  | UndefinedVar { crSrc :: NamedSource, crAt :: Span, uvName :: Text, uvPrior :: [Span]
 +                 , uvRelated :: [SomeDiagnostic], uvCause :: Maybe SomeDiagnostic, uvId :: Text }
 +
 +deriveDiagnosticSum
 +  [ ( 'ParseFailure
 +    , defaultSpec
 +        { specCode        = Just "tadka::E0101"
-+        , specSourceField = Just 'peSrc
-+        , specLabelFields = [('peAt, "here")]
++        , specSourceField = Just 'crSrc
++        , specLabelFields = [('crAt, "here")]
 +        , specId          = Just 'peId
 +        , specMessage     = Just [| \_ -> pretty ("unexpected token" :: Text) |]
 +        }
@@ -395,16 +410,16 @@ index 0000000..7b5db48
 +    , defaultSpec
 +        { specSeverity    = SevWarning
 +        , specHelp        = Just "check the type annotation"
-+        , specSourceField = Just 'tmSrc
-+        , specLabelFields = [('tmAt, "here")]
++        , specSourceField = Just 'crSrc
++        , specLabelFields = [('crAt, "here")]
 +        , specMessage     = Just [| \e -> pretty ("type mismatch: expected " <> tmExpected e
 +                                                     <> ", got " <> tmActual e) |]
 +        }
 +    )
 +  , ( 'UndefinedVar
 +    , defaultSpec
-+        { specSourceField                    = Just 'uvSrc
-+        , specLabelFields                    = [('uvAt, "used here")]
++        { specSourceField                    = Just 'crSrc
++        , specLabelFields                    = [('crAt, "used here")]
 +        , specSecondaryLabelCollectionFields  = [('uvPrior, "shadowed here")]
 +        , specRelated                        = Just 'uvRelated
 +        , specCause                          = Just 'uvCause
@@ -418,9 +433,9 @@ index 0000000..7b5db48
 +-- === Hand-written twin: identical fields, identical bodies =================
 +
 +data CompileErrorManual
-+  = ParseFailureM { pemSrc :: NamedSource, pemAt :: Span, pemId :: DiagnosticId }
-+  | TypeMismatchM { tmmSrc :: NamedSource, tmmAt :: Span, tmmExpected :: Text, tmmActual :: Text }
-+  | UndefinedVarM { uvmSrc :: NamedSource, uvmAt :: Span, uvmName :: Text, uvmPrior :: [Span]
++  = ParseFailureM { crmSrc :: NamedSource, crmAt :: Span, pemId :: DiagnosticId }
++  | TypeMismatchM { crmSrc :: NamedSource, crmAt :: Span, tmmExpected :: Text, tmmActual :: Text }
++  | UndefinedVarM { crmSrc :: NamedSource, crmAt :: Span, uvmName :: Text, uvmPrior :: [Span]
 +                  , uvmRelated :: [SomeDiagnostic], uvmCause :: Maybe SomeDiagnostic, uvmId :: Text }
 +
 +instance Diagnostic CompileErrorManual where
@@ -438,9 +453,9 @@ index 0000000..7b5db48
 +  help (TypeMismatchM {}) = Just (pretty ("check the type annotation" :: Text))
 +  help _                  = Nothing
 +
-+  context (ParseFailureM { pemSrc = s, pemAt = a }) = buildContext s [(a, Just "here")]
-+  context (TypeMismatchM { tmmSrc = s, tmmAt = a }) = buildContext s [(a, Just "here")]
-+  context (UndefinedVarM { uvmSrc = s, uvmAt = a, uvmPrior = prior }) =
++  context (ParseFailureM { crmSrc = s, crmAt = a }) = buildContext s [(a, Just "here")]
++  context (TypeMismatchM { crmSrc = s, crmAt = a }) = buildContext s [(a, Just "here")]
++  context (UndefinedVarM { crmSrc = s, crmAt = a, uvmPrior = prior }) =
 +    buildContextWith s
 +      (  [ (a, Primary, Just "used here") ]
 +      ++ [ (p, Secondary, Just "shadowed here") | p <- prior ] )
