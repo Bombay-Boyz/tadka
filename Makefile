@@ -1,22 +1,17 @@
 # Convenience targets. Each test suite is independently runnable, per the
 # Phase 0 exit criteria and the cross-phase note "testing is not deferred."
 
-.PHONY: build test test-golden test-props test-interop check-generated check-compile-fail clean gen-width-table lint format format-check
+.PHONY: build test test-golden test-props test-interop check-generated check-compile-fail clean gen-width-table format format-check
 
 # All first-party Haskell sources: library, both test suites, the three
 # interop sub-libraries, and the standalone tools/ scripts. Kept as one
-# variable so lint/format/format-check always agree on what "the codebase" is.
+# variable so format/format-check always agree on what "the codebase" is.
 HS_SOURCES := $(shell find src test interop tools -name '*.hs')
 
 build:
 	cabal build all
 
 test: test-golden test-props test-interop check-generated check-compile-fail
-
-# Requires hlint on PATH (`cabal install hlint` or `ghcup install hlint`).
-# Uses the repo's .hlint.yaml automatically.
-lint:
-	hlint $(HS_SOURCES)
 
 # Requires ormolu on PATH (`cabal install ormolu` or `ghcup install ormolu`).
 # `format` rewrites files in place; `format-check` (used in CI) fails without

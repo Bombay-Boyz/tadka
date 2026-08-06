@@ -32,22 +32,19 @@ Follow `principles.docx`: total functions, explicit error handling (`Maybe` /
 unrepresentable via smart constructors and unexported constructors, IO at the
 edges, property-based tests alongside unit tests, warnings-as-errors.
 
-### Lint & format
+### Format
 
-Install once: `cabal install hlint ormolu`.
+Install once: `cabal install ormolu`.
 
-- `make lint` — runs `hlint` over `src/`, `test/`, `interop/`, `tools/` using
-  the repo's `.hlint.yaml`.
-- `make format` — runs `ormolu --mode inplace` over the same sources; run this
-  before committing.
-- `make format-check` — same, but only checks and never rewrites; this is what
-  CI runs.
+- `make format` — runs `ormolu --mode inplace` over `src/`, `test/`,
+  `interop/`, `tools/`; run this before committing.
+- `make format-check` — same, but only checks and never rewrites. Run this
+  locally before pushing; it is not currently wired into CI.
 
-Both also run in CI (`lint-and-format` job) on every push and PR — a PR with
-unformatted code or a real hlint warning won't go green. If hlint's take on
-something conflicts with a deliberate style choice (see the export-list note
-in `.hlint.yaml` for a precedent), add a scoped ignore with a comment, not a
-blanket one.
+We don't run hlint in CI: `-Wall`/`-Wcompat` (warnings-as-errors) already
+enforce the substantive checks, and hlint's style hints produced enough false
+positives against deliberate choices in this codebase (see e.g. the
+export-list style in `Tadka.hs`) that it wasn't worth gating merges on.
 
 ## Review checklist — `deriveDiagnostic` discipline (vision §6)
 
