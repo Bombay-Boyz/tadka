@@ -12,7 +12,7 @@ description:
   This release is the Phase 0 skeleton: module layout, dependency pins, and
   independently-runnable test suites. No functionality is implemented yet.
 category:           Development, Error Handling
-license:            BSD-3-Clause
+license: MPL-2.0
 license-file:       LICENSE
 author:             the tadka authors
 maintainer:         tadka@example.org
