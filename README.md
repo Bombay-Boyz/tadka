@@ -1,108 +1,162 @@
 # tadka
 
-> **Point at the problem. Say it clearly. Make it beautiful.**
+`tadka` is a small library for writing error types in Haskell that render
+themselves as nice diagnostic reports — the kind of thing you get from
+`rustc`: a pointer at the exact bit of source that's wrong, an error code,
+a line of help text, maybe a link to more detail.
 
-A diagnostic reporting framework for Haskell, targeting full feature parity with
-Rust's [`miette`](https://github.com/zkat/miette): structured error types, three
-pluggable renderers (graphical / narratable / JSON), error codes with doc links,
-related-error chains, labeled multi-span source snippets, and derive-macro
-ergonomics.
+It's heavily inspired by, and tries to follow the shape of, the Rust crate
+[`miette`](https://github.com/zkat/miette) by Kat Marchán and its
+contributors. If you've used `miette` and liked it, `tadka` is an attempt to
+bring that same experience to Haskell — same idea (a `Diagnostic` typeclass,
+labeled spans, pluggable renderers), rebuilt from scratch for this language
+and its conventions. Credit for the design belongs to them; any rough edges
+in this port are ours.
 
-Design: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`
+This is a young library. It's tested reasonably thoroughly (golden fixtures,
+property tests, compile-fail tests for the derive macro), but it hasn't had
+much real-world mileage yet. Treat it accordingly — read the code before you
+depend on it for anything important, and expect the internal modules (see
+below) to move around.
 
-## Status
+## What it does
 
-**Phase 11 — consolidation & v1.** Public API reconciled to vision §8
-(`Offset`/`Length` are now internal-only; spans are the public position type),
-dependency upper bounds added, and all golden + property suites plus the derive
-and interop checks run together. The vision's Success Criterion is an
-end-to-end test: a misspelled span field fails at compile time, and a staled
-span renders a clear in-report reason on every handler. Tagged **v1.0.0.0**.
+- A `Diagnostic` typeclass your error type implements. Only a message is
+  required; everything else (source labels, error code, severity, help text,
+  a doc link, related errors, an underlying cause) is optional and defaulted.
+- Three renderers: a graphical one (the `┌─ file:line:col` / underline style
+  you'd expect), a narratable one (plain prose, meant for screen readers),
+  and a JSON one (for tools that want to consume diagnostics rather than
+  read them).
+- A `deriveDiagnostic` Template Haskell macro so you don't have to hand-write
+  the typeclass instance for the common case — you describe which record
+  field is the source, which fields are spans, and it generates the rest.
+- Support for a diagnostic that points into more than one file at once (an
+  import that disagrees with a definition elsewhere, for example).
+- Small helpers to convert positions from `megaparsec`, `attoparsec`, and
+  GHC's own `SrcSpan` into `tadka`'s span type, so you don't have to do that
+  by hand if you're already using one of those.
 
-**Phase 10 — interop helpers.** One-directional adapters turning megaparsec,
-attoparsec, and GHC `SrcSpan` positions into tadka `Span`/`Offset`, each a plain
-function in its own cabal sub-library so the core never depends on a parser
-package. Per-library round-trip tests confirm the converted position resolves to
-the same line/column the upstream library reports.
+## Installing
 
-**Phase 9 — generics label-wiring.** `genericContext` derives *only* the
-`context` method, via GHC.Generics, for a record with one `NamedSource` field
-and one-or-more `Span` fields (span field names become label text), calling the
-same `buildContext`. Its `e -> Context` type means it can touch nothing else;
-the record shape is checked at compile time. Proved equal to a hand-written twin
-across all three handlers
+Not on Hackage yet. For now, point at it as a source or git dependency in
+your `cabal.project`. It needs GHC 9.6 or newer.
 
-**Phase 8 — `deriveDiagnostic` macro.** An ordinary Template Haskell splice
-(`DiagnosticSpec` + `defaultSpec` + `deriveDiagnostic`) that `reify`-validates
-field references, types, and code/url literals at splice time and generates a
-`Diagnostic` instance whose every method body is a direct call to a shared
-`Tadka.Internal` function — proved by a byte-for-byte derived-vs-manual test
-across all three handlers. Malformed specs fail at compile time; a CI grep over
-the generated golden fixture enforces the no-logic-in-the-splice discipline.
+## A quick example
 
-**Phase 7 — JSON report handler.** `renderJson` builds a dedicated
-`DiagnosticDTO` (never `deriving ToJSON` on a diagnostic type) with explicit
-per-label `stale` flags and per-level `truncated`/`cycleOmitted` flags. It is
-the only route to `Output 'TJson = Aeson.Value`. Locked by golden fixtures and
-property-tested for stale-flag derivation and totality.
+Here's a small, complete program: one error type, derived instead of
+hand-written, rendered three different ways.
 
-**Phase 6 — narratable report handler.** `renderNarratable` produces the
-accessibility-first prose form, with prose equivalents for stale labels and
-related-chain truncation/cycles and `Ann` interpreted via `toProseMarker`.
-Locked by golden fixtures and property-tested; every field the graphical handler
-shows has a narratable equivalent.
+```haskell
+{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE OverloadedStrings #-}
 
-**Phase 5 — graphical report handler.** The full graphical report — severity/code
-header, `┌─ file:line:col` location, a line-numbered `│`-rail gutter, source
-snippets, and Unicode-width-correct underline carets with per-label cycling —
-plus stale-label degradation and related-chain nesting driven by the Phase 3
-walk. Locked by four byte-for-byte golden fixtures and property-tested for
-non-negative width-aware carets, palette cycling, and totality.
+module Main (main) where
 
-## Module layout (fixed in Phase 0)
+import Data.Text (Text)
+import Tadka
 
-| Module                                                | Role                                                             | Compatibility    |
-| ----------------------------------------------------- | ---------------------------------------------------------------- | ---------------- |
-| `Tadka`                                               | Sole supported public API surface                                | Stable (from v1) |
-| `Tadka.Internal`                                      | Shared functions both the derive macro and manual instances call | None             |
-| `Tadka.Internal.Width`                                | Bundled Unicode width / grapheme table                           | None             |
-| `Tadka.Internal.Context`                              | `buildContext` and context construction                          | None             |
-| `Tadka.Internal.Renderer.{Graphical,Narratable,Json}` | The three report handlers                                        | None             |
-| `Tadka.Internal.TH`                                   | `deriveDiagnostic` splice                                        | None             |
-| `Tadka.Internal.Generics`                             | Generics-based `context` label-wiring                            | None             |
-| `Tadka.Internal.Interop`                              | Namespace for Phase 10 parser adapters                           | None             |
+-- An error type. `uvSource` holds the file it happened in, `uvAt` is the
+-- span of the bad identifier, `uvName` is just extra data for the message.
+data UnboundVariable = UnboundVariable
+  { uvSource :: NamedSource
+  , uvName   :: Text
+  , uvAt     :: Span
+  }
 
-## Building
+-- No hand-written Diagnostic instance: this describes the shape, and
+-- deriveDiagnostic generates the instance from it.
+deriveDiagnostic
+  defaultSpec
+    { specCode        = Just "demo::E0001"
+    , specHelp        = Just "check for typos, or import the module that defines it"
+    , specUrl         = Just "https://example.org/errors/E0001"
+    , specSourceField = Just 'uvSource
+    , specLabelFields = [ ('uvAt, "not found in this scope") ]
+    }
+  ''UnboundVariable
 
-Requires **GHC 9.10.1** and **Cabal ≥ 3.0** (install via [ghcup](https://www.haskell.org/ghcup/)).
-`cabal.project` pins a Hackage `index-state` for reproducible builds, so the
-first build fetches and compiles the dependencies (this needs network access).
+main :: IO ()
+main = do
+  let code = "main = print (foo + 1)\n"
+  --                        ^^^ offset 14, length 3
 
-```sh
-cabal build all          # build the library, interop sub-libraries, and tests
-cabal test all           # run every suite (golden, properties, interop)
+  Right source <- pure (mkNamedSource "Main.hs" code)
+  Right at     <- pure (mkSpan 14 3)
 
-# or individually:
-cabal test golden        # byte-for-byte rendering fixtures
-cabal test props         # Hedgehog property suite
-cabal test interop       # megaparsec / attoparsec / GHC SrcSpan round-trips
+  let err = UnboundVariable source "foo" at
+
+  putStrLn "-- graphical (what you'd see in a terminal) --"
+  reportDiagnostic defaultConfig err
+
+  putStrLn "\n-- narratable (prose, for a screen reader) --"
+  reportDiagnostic (withTarget TNarratable defaultConfig) err
+
+  putStrLn "\n-- JSON (for a tool, not a person) --"
+  reportDiagnostic (withTarget TJson defaultConfig) err
 ```
 
-The `werror` flag is enabled project-wide in `cabal.project` (warnings are
-errors); the released package leaves it off by default so new GHC warnings can't
-break downstream installs.
+Run it (`cabal run` or `runghc`, once `tadka` is a dependency) and you should
+see something close to:
 
-### Makefile
-
-```sh
-make build                 # cabal build all
-make test                  # all suites + the two discipline checks below
-make test-golden           # golden suite
-make test-props            # property suite
-make test-interop          # interop round-trip suite
-make check-generated       # assert derive-macro output is logic-free
-make check-compile-fail    # assert each bad deriveDiagnostic use fails to compile
+```
+error: [demo::E0001] undefined variable
+┌─ Main.hs:1:15
+│
+1 │ main = print (foo + 1)
+│               ^^^ not in scope
+│
+= help: check for typos, or import the module that defines it
+= see: https://example.org/errors/E0001
 ```
 
-Design notes: `Tadka_Vision_v5.md`. Build plan: `Tadka_Implementation_Spec.md`.
-Haskell principles the codebase follows: `principles.md`
+followed by the same information again as a couple of plain-English
+sentences, and then again as a JSON object with `"code"`, `"labels"`,
+`"help"`, and so on. Same underlying data, three shapes — pick whichever
+one fits the surface you're writing for (terminal, accessibility tooling,
+or machine consumer of the diagnostic).
+
+That's most of the day-to-day API surface. Beyond this, `mkContextMulti` lets
+a diagnostic label more than one file at once, and `related` /
+`diagnosticCause` on the typeclass let you attach other diagnostics as a
+tree or a linear "caused by" chain — both of which the derive macro also
+supports, if you'd rather not write the instance by hand.
+
+## Testing this repo
+
+```sh
+cabal build all
+cabal test all
+```
+
+or, if you have `make`:
+
+```sh
+make build
+make test
+```
+
+## A note on where things stand
+
+The public, supported entry point is the `Tadka` module. Everything under
+`Tadka.Internal.*` is exposed (the derive macro and hand-written instances
+need to share real functions, not just an interface), but it isn't part of
+the stable API and can change without warning. If you're only importing
+`Tadka`, you're on solid ground; if you reach into `Tadka.Internal`, you're
+opting into some churn.
+
+## License
+
+## License
+
+Tadka is licensed under the Mozilla Public License 2.0 (MPL-2.0).
+
+Commercial and open-source use are both permitted. If you distribute
+modifications to MPL-covered files, those modifications must remain under
+MPL-2.0. See the LICENSE file for details.
+
+## Thanks
+
+Again — `tadka` exists because [`miette`](https://github.com/zkat/miette)
+showed what a good diagnostic-reporting library could look like. Thank you
+to Kat Marchán and everyone who's worked on it.
