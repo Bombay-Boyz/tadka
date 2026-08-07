@@ -1,6 +1,4 @@
-- [ ] # Contributing to tadka
-  
-  Thanks for taking a look. This is a small, one-person project — bug reports, doc fixes, and small pull requests are all genuinely welcome. No contribution is too small to be worth opening.
+Thanks for taking a look. This is a small, one-person project — bug reports, doc fixes, and small pull requests are all genuinely welcome. No contribution is too small to be worth opening.
   
   ## Getting started
   
