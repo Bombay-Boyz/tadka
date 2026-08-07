@@ -1,9 +1,8 @@
 # Changelog for `tadka`
 
-All notable changes are recorded here. The library follows the phasewise plan
-in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
+All notable changes are recorded here. 
 
-## Unreleased — miette-parity hardening
+## 2.0.0.0 — miette-parity hardening
 
 ### Multi-source diagnostics (Phase 12)
 - **Breaking:** `Tadka.Internal.Renderer.Json`'s `LabelDTO` gains a `file`
@@ -47,7 +46,7 @@ in `Tadka_Implementation_Spec.md`, itself derived from `Tadka_Vision_v5.md`.
     via the new `file` field.
 - The derive macro (`deriveDiagnostic`) and `genericContext` remain
   single-source only in v1; `buildContextMulti` is a hand-written-instance
-  entry point. Deferred, not forgotten — see `Tadka_Phase12_Spec.md` §6.
+  entry point. Deferred, not forgotten, for a future release. §6.
 - New `Phase12` property group (6 properties, 100 generated cases each):
   `mkContextMulti`/`mkContextMultiDegrading`'s per-group and cross-group
   count/order guarantees, the single-source functions' exact equivalence to

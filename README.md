@@ -144,9 +144,7 @@ need to share real functions, not just an interface), but it isn't part of
 the stable API and can change without warning. If you're only importing
 `Tadka`, you're on solid ground; if you reach into `Tadka.Internal`, you're
 opting into some churn.
-
-## License
-
+ 
 ## License
 
 Tadka is licensed under the Mozilla Public License 2.0 (MPL-2.0).

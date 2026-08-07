@@ -1,61 +1,65 @@
-# Contributing to `tadka`
-
-## Enforced conventions (review-enforced, not type-enforced)
-
-These two conventions are the crux of the v5 design. They are **not** checked by
-the type system, so they are checked here and — for the derive macro — by a CI
-grep check added in Phase 8. Bake both into your mental model before touching
-Phase 4 (renderer scaffolding) or Phase 5 (graphical handler), the largest
-surfaces where a shortcut could quietly violate either.
-
-1. **One path** (Phases 4, 7). Every `GraphicalOptions` / `NarratableOptions` /
-   `JsonOptions` value is constructed only by `selectRenderer`. Every
-   `Aeson.Value` for a diagnostic is produced only by the JSON handler's DTO
-   conversion. Do not add a second construction site.
-
-2. **Provably thin** (Phase 8). Every method body `deriveDiagnostic` generates
-   must be a direct, unmodified call to a plain, exported `Tadka.Internal`
-   function that a manual instance could also call. If a new field needs logic
-   the current `Tadka.Internal` surface can't express as a plain call, extract a
-   new plain function first — never grow logic inside a `Q` splice.
-
-## Scope boundaries — permanent, not "later"
-
-- No fourth render `Target`; `Target`/`Output` are closed by design.
-- No `FromJSON` decode path in v1.
-- No dedicated interop helper beyond `megaparsec`, `attoparsec`, GHC `SrcSpan`.
-
-## Style
-
-Follow `principles.docx`: total functions, explicit error handling (`Maybe` /
-`Either` / custom error types, never silent failure), illegal states made
-unrepresentable via smart constructors and unexported constructors, IO at the
-edges, property-based tests alongside unit tests, warnings-as-errors.
-
-### Format
-
-Install once: `cabal install ormolu`.
-
-- `make format` — runs `ormolu --mode inplace` over `src/`, `test/`,
-  `interop/`, `tools/`; run this before committing.
-- `make format-check` — same, but only checks and never rewrites. Run this
-  locally before pushing; it is not currently wired into CI.
-
-We don't run hlint in CI: `-Wall`/`-Wcompat` (warnings-as-errors) already
-enforce the substantive checks, and hlint's style hints produced enough false
-positives against deliberate choices in this codebase (see e.g. the
-export-list style in `Tadka.hs`) that it wasn't worth gating merges on.
-
-## Review checklist — `deriveDiagnostic` discipline (vision §6)
-
-When changing `Tadka.Internal.TH` or the `Tadka.Internal` surface it calls:
-
-- [ ] Every generated `Diagnostic` method body is a **direct, unmodified call**
-      to a function exported from `Tadka.Internal` (or a class default). No
-      `case`/`if`/`let`/`where`/lambda logic inside the `Q` splice.
-- [ ] If a new field needs behaviour the current `Tadka.Internal` surface can't
-      express as a plain call, a new plain function is extracted **there first**
-      (with its own Phase-1/2/3-style test), rather than adding logic to the splice.
-- [ ] The only exception is the default `message` (`pretty . show`).
-- [ ] `tools/check-generated.sh` still passes (CI enforces this), and
-      `tools/check-compile-fail.sh` still rejects malformed specs.
+- [ ] # Contributing to tadka
+  
+  Thanks for taking a look. This is a small, one-person project — bug reports, doc fixes, and small pull requests are all genuinely welcome. No contribution is too small to be worth opening.
+  
+  ## Getting started
+  
+  ```sh
+  git clone https://github.com/Bombay-Boyz/tadka.git
+  cd tadka
+  cabal build all
+  cabal test all
+  ```
+  
+  Or, with `make`:
+  
+  ```sh
+  make build
+  make test
+  ```
+  
+  The two test suites run independently, so `cabal test golden` or `cabal test props` work fine on their own if you're only touching one area.
+  
+  ## Two rules that actually matter
+  
+  Nothing else here is checked by the compiler, so it's worth knowing these before you dig in:
+  
+  **Renderers are built one way.** Every `GraphicalOptions` / `NarratableOptions` / `JsonOptions` value comes from `selectRenderer`, and every `Aeson.Value` for a diagnostic comes from the JSON handler's own DTO conversion. If a change seems to need a second way to build one of these, that's usually a sign to adjust `selectRenderer` (or the DTO conversion) rather than add a parallel path.
+  
+  **Generated code stays thin.** Every method body `deriveDiagnostic` produces has to be a plain call to an ordinary, exported `Tadka.Internal` function — the same one a hand-written instance could call. If a field needs logic the current surface can't express as a plain call, add that as a new function first, then have the macro call it. A CI check enforces this automatically.
+  
+  ## What's out of scope
+  
+  Not "later" — genuinely not planned:
+  
+  - A fourth output format. Graphical, narratable, and JSON are it.
+  - Reading JSON back into a diagnostic. The JSON output is one-way.
+  - An adapter for every parser library. `megaparsec`, `attoparsec`, and GHC's `SrcSpan` are covered; anything else can build a `Span` by hand.
+  
+  Want to argue one of these should change? Open an issue first — it's a design conversation, not a PR.
+  
+  ## Style
+  
+  Total functions over partial ones. Errors handled explicitly — `Maybe`, `Either`, or a proper error type, never a silent failure. If a value has a rule it must follow, give it a smart constructor rather than trusting every caller to remember. Tests for anything with a real invariant, not just an example to pin down.
+  
+  Format with `ormolu` (`cabal install ormolu`):
+  
+  ```sh
+  make format         # rewrites files in place
+  make format-check    # checks only, doesn't rewrite
+  ```
+  
+  We don't run hlint here — `-Wall`/`-Wcompat` already catch the substantive issues, and hlint's style opinions fought enough deliberate choices in this codebase that it wasn't worth gating merges on.
+  
+  ## Touching the derive macro
+  
+  If you're changing `Tadka.Internal.TH` or what it calls into, check before opening the PR:
+  
+  - [ ] Every generated method body is a direct call to a `Tadka.Internal` function or a class default — no `case`/`if`/`let` inside the splice.
+  - [ ] A field needing real logic gets that logic as a new plain function first, with its own test, before the macro calls it.
+  - [ ] The one exception is the default `message` (`pretty . show`).
+  - [ ] `tools/check-generated.sh` and `tools/check-compile-fail.sh` both pass.
+  
+  ## Opening a PR
+  
+  Small and focused is easier to review than large and sweeping. Include a test if the change isn't purely cosmetic. Not sure an idea fits? Open an issue and ask first — saves us both time if the answer turns out to be "that's out of scope."
