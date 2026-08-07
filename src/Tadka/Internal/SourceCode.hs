@@ -1,10 +1,4 @@
--- | Windowed, read-only access to source text for rendering — Phase I of the
--- snippet-renderer rework and the seam for pluggable source backends.
---
--- The renderer asks only for the line window it needs ('scLines'), so an
--- instance may hold the whole source in memory (as 'NamedSource' does, the
--- canonical instance) or fetch lazily from a file or mmap. Every method is
--- total: out-of-range requests yield fewer or no lines, never an error.
+
 --
 -- No compatibility guarantee (see "Tadka.Internal").
 module Tadka.Internal.SourceCode

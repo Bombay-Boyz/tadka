@@ -39,7 +39,7 @@ data RelatedTree = RelatedTree
   , relatedTermination :: TerminationReason
   }
 
--- | The default @related@ depth limit (vision §5; a @Config@ field in Phase 4).
+
 defaultRelatedDepth :: Natural
 defaultRelatedDepth = 8
 

@@ -47,11 +47,7 @@ data GBProp
   | GBLVT
   deriving (Eq, Show, Enum, Bounded)
 
--- | Monospace display width of a single code point: @0@ for zero-width marks
--- (general categories Mn, Me, Cf), @2@ for East-Asian Wide/Fullwidth, else @1@.
---
--- This is a per-code-point width; grapheme-aware width (combining sequences,
--- ZWJ emoji) is 'textWidth' / the Phase 5 segmentation, not this function.
+
 charWidth :: Char -> Int
 charWidth c =
   let x = ord c

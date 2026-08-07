@@ -264,8 +264,7 @@ jsonFixtures =
   , ("json-cross-file", SomeDiagnostic crossFile)
   ]
 
--- Derive-macro example from vision §6, plus a dump of the generated instance
--- source (for the "generated bodies are direct calls" CI grep, spec Phase 8).
+
 data ParseError = UnexpectedToken
   { errSource :: NamedSource
   , got       :: Text

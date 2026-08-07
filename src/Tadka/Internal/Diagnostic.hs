@@ -1,14 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
--- | The 'Diagnostic' typeclass — the single interface every
--- renderer consumes — and the 'SomeDiagnostic' existential used for @related@
--- chains.
---
--- 'message' is the only mandatory method: no default, and deliberately no
--- @Show@ superclass, so a concrete error type may @deriving (Show)@ for its own
--- debugging without that leaking into user-facing output. The other seven
--- methods are defaulted, so a minimal instance is just @message@.
---
+
 -- No compatibility guarantee.
 module Tadka.Internal.Diagnostic
   ( Diagnostic (..)

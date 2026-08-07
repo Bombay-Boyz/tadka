@@ -17,16 +17,7 @@
 -- sum type hits the same tradeoff and makes the same call locally.
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 
--- | Phase 13: 'deriveDiagnosticSum' is 'deriveDiagnostic''s multi-constructor
--- counterpart (vision §6, "Sum types (v6)"). Same proof obligation as Phase 8:
--- a derived instance and a hand-written instance for a structurally identical
--- sum type render byte-for-byte identically across all three handlers. The
--- three constructors here are chosen to exercise every 'DiagnosticSpec' field
--- across the sum, not just one shape repeated three times: fixed primary
--- labels, a secondary collection field, a literal and a dynamic message, both
--- 'IdKind's ('DiagnosticId' directly and via 'Text'), a non-default severity,
--- @help@, @related@, and @diagnosticCause@ all appear on at least one
--- constructor and are absent on at least one other.
+
 module Phase13 (group) where
 
 import qualified Data.Aeson                 as A

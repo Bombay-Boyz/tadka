@@ -73,7 +73,7 @@ library
                     
   -- Generated, checked-in Unicode table (regenerate via tools/gen-width-table.hs):
   other-modules:    Tadka.Internal.Width.Table
-  -- Dependency pins widened for multi-GHC support: GHC 9.4.7 through 9.14.1
+  -- Dependency pins widened for multi-GHC support: GHC 9.6.7 through 9.14.1
   -- (vision Infrastructure). `array` backs the width table's binary-searched
   -- ranges; `network-uri` validates absolute URLs.
   --

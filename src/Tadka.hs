@@ -7,7 +7,7 @@
 -- Phases 1–2 populate the validated primitive types, resolution-indexed spans,
 -- and 'Context' construction. The @Diagnostic@ class, renderers, and the derive
 -- macro, and interop adapters complete the surface. The public API matches
--- vision §8; @Offset@\/@Length@ and other representation details live under
+--  @Offset@\/@Length@ and other representation details live under
 -- "Tadka.Internal" with no compatibility guarantee.
 module Tadka
   ( -- * Named source
@@ -20,7 +20,7 @@ module Tadka
     --
     -- Spans are the public position type; @Offset@\/@Length@ are the internal
     -- offset representation and live in "Tadka.Internal.Types" (no compatibility
-    -- guarantee), per vision §8.
+    -- guarantee)
   , Span
   , ResolvedSpan
   , mkSpan

@@ -4,15 +4,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | The single path from 'Config' to a constructible renderer.
---
--- 'selectRenderer' is the only function that builds a @*Options@ value or wraps
--- one in a 'Renderer' constructor, and the only reader of 'Config''s fields —
--- so there is one route from configuration to a renderer that does anything,
--- not two that could drift apart. 'render''s per-constructor arms dispatch to
--- the handler bodies in "Tadka.Internal.Renderer.*" (placeholders until Phases
--- 5–7).
---
+
 -- No compatibility guarantee.
 module Tadka.Internal.Render
   ( Output
@@ -63,11 +55,7 @@ data Renderer (t :: Target) where
 -- | A renderer with its target hidden, as returned by 'selectRenderer'.
 data SomeRenderer = forall t. SomeRenderer (Renderer t)
 
--- | The sole constructor of @*Options@ values and 'Renderer' wrappers, and the
--- sole reader of 'Config'. An explicit 'withTarget' override wins; absent one,
--- Phase 4 defaults to 'TGraphical' (IO-based terminal/@NO_COLOR@/@--json@
--- detection is threaded in via 'reportDiagnostic' resolving to an explicit
--- target in a later phase, keeping this function pure).
+
 selectRenderer :: Config -> SomeRenderer
 selectRenderer cfg =
   case fromMaybe TGraphical (configTarget cfg) of
@@ -94,12 +82,7 @@ render (Graphical opts)  e = renderGraphical opts e
 render (Narratable opts) e = renderNarratable opts e
 render (Json opts)       e = renderJson opts e
 
--- | Select a renderer, render, and write to the right sink: graphical to the
--- terminal, narratable to stdout, JSON to stdout as encoded JSON. Covers the
--- common case with no manual existential unwrap. (Graphical output is plain
--- text in Phase 4; ANSI styling lands with the handler in Phase 5.)
--- | Detect the sink's capabilities, resolve any @Auto@ modes to concrete ones,
--- then select, render, and write. Explicit colour/Unicode modes are unaffected.
+
 reportDiagnostic :: Diagnostic e => Config -> e -> IO ()
 reportDiagnostic cfg e = do
   caps <- detectTerminalCaps stdout
