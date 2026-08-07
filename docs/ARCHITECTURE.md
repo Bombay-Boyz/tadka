@@ -109,11 +109,9 @@ that isn't a single function application — the automated half of the "provably
 thin" claim above, at least for the fixture shapes the golden suite exercises.
 
 The library is written to build against GHC 9.6 through 9.14 (the
-`tested-with` list in `tadka.cabal`), and that range has been verified
-manually. CI itself currently builds against one version (9.10.1) rather
-than a matrix across the whole range, so day-to-day pushes aren't
-continuously checked on the older/newer ends of that range — worth knowing
-if you're relying on a specific GHC version working.
+`tested-with` list in `tadka.cabal`). CI now builds against a matrix
+covering every version in that list, so day-to-day pushes are continuously
+checked across the whole range, not just verified manually once.
 
 ## What's not covered by any of this
 

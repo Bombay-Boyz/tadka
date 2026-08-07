@@ -1,7 +1,7 @@
 name: CI
 
-# Build + both test suites, each runnable independently. Every later phase adds
-# fixtures/properties to the existing suites; none of them wait for Phase 11.
+# Build + all suites, each runnable independently, across the full range of
+# GHC versions this package claims to support (tadka.cabal's `tested-with`).
 on:
   push:
     branches: [main]
@@ -10,13 +10,17 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ['9.6.7', '9.8.4', '9.10.3', '9.12.4', '9.14.1']
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up GHC and Cabal
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.10.1'
+          ghc-version: ${{ matrix.ghc }}
           cabal-version: '3.16.1.0'
 
       - name: Freeze / configure
@@ -37,11 +41,11 @@ jobs:
       - name: Interop tests
         run: cabal test interop --test-show-details=direct
 
-      # Phase 8 discipline (vision §6): every deriveDiagnostic-generated method
-      # body must be a direct call to a shared function — no logic in the splice.
+      # Every deriveDiagnostic-generated method body must be a direct call to
+      # a shared function — no logic in the splice.
       - name: Generated-code discipline check
         run: sh tools/check-generated.sh
 
-      # Phase 8: malformed deriveDiagnostic uses must fail at compile time.
+      # Malformed deriveDiagnostic uses must fail at compile time.
       - name: Compile-fail tests
         run: sh tools/check-compile-fail.sh
