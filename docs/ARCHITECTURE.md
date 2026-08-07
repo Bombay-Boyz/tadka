@@ -34,13 +34,6 @@ Everything under `Tadka.Internal.*` carries no compatibility guarantee —
 that's the point of the split. `Tadka` is the only module meant to be
 depended on directly.
 
-One leftover worth knowing about: `Tadka.Internal.Interop` is an empty
-namespace module from an early plan to put the parser adapters under
-`Tadka.Internal`. That's not where they ended up — they're the three
-separate sub-libraries listed above instead, so the core library never
-depends on a parser package. The empty module should probably just be
-deleted; it's dead weight, not a placeholder for anything upcoming.
-
 ## The two guarantees, and where they live
 
 **"Nothing constructs into an invalid value"** lives entirely in
@@ -94,7 +87,7 @@ terminal supports it, independent of color.
 
 ## Testing
 
-Two suites, run independently:
+Three suites, run independently:
 
 - **Golden**: 20 fixed fixtures, byte-for-byte, covering single/multi-label
   output, degraded labels, cycle-omitted chains, and the narratable/JSON
@@ -103,15 +96,24 @@ Two suites, run independently:
   count invariance under degradation, cycle-marker correctness, renderer
   totality (nothing throws), gutter/caret math never going negative, and
   smart-constructor rejection.
+- **Interop**: round-trip checks for the three parser adapters —
+  megaparsec, attoparsec, and GHC's own `SrcSpan` — confirming each one
+  produces a `Span` that resolves the way the source position it came from
+  actually implies.
 
-Both are wired into CI, along with a compile-fail suite (`tools/check-
+All three are wired into CI, along with a compile-fail suite (`tools/check-
 compile-fail.sh`) that confirms specific malformed `deriveDiagnostic` uses
 fail at the splice site with the expected message, and a discipline check
 (`tools/check-generated.sh`) that greps generated golden output for anything
 that isn't a single function application — the automated half of the "provably
 thin" claim above, at least for the fixture shapes the golden suite exercises.
 
-Build is checked against GHC 9.6 through 9.14.
+The library is written to build against GHC 9.6 through 9.14 (the
+`tested-with` list in `tadka.cabal`), and that range has been verified
+manually. CI itself currently builds against one version (9.10.1) rather
+than a matrix across the whole range, so day-to-day pushes aren't
+continuously checked on the older/newer ends of that range — worth knowing
+if you're relying on a specific GHC version working.
 
 ## What's not covered by any of this
 

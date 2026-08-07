@@ -16,7 +16,7 @@ Thanks for taking a look. This is a small, one-person project — bug reports, d
   make test
   ```
   
-  The two test suites run independently, so `cabal test golden` or `cabal test props` work fine on their own if you're only touching one area.
+  There are three independently-runnable test suites — `golden`, `props`, and `interop` (round-trip checks for the megaparsec/attoparsec/GHC `SrcSpan` adapters) — so `cabal test golden`, `cabal test props`, or `cabal test interop` work fine on their own if you're only touching one area.
   
   ## Two rules that actually matter
   

@@ -92,8 +92,7 @@ reader is in the loop and prose output matters as much as the boxed one.
 
 This is a hobby project, built by one person, reviewed once by an outside
 pass. The core rendering and resolution logic held up under that review. A
-few rough edges remain — an empty leftover module from an early plan that
-never got cleaned up, one internal file where two code paths do the same
+few rough edges remain — one internal file where two code paths do the same
 thing independently instead of sharing a helper, some documentation that
 lagged behind the code for a stretch. None of that is hidden; it's tracked
 in the repo's own issue history rather than pretended away here.

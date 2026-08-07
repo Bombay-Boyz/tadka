@@ -310,8 +310,8 @@ public API matches vision §8.
 ### Phase 10 — Interop Helpers
 - One-directional adapters turning parser positions into tadka `Span`/`Offset`,
   each a plain function against Phase 1/2 types with no new core surface:
-  - `Tadka.Interop.Megaparsec`: `offsetFromError`/`spanFromError` from a
-    megaparsec `ParseError`'s stream `errorOffset`.
+  - `Tadka.Interop.Megaparsec`: `spanFromError` from a megaparsec
+    `ParseError`'s stream `errorOffset`.
   - `Tadka.Interop.Attoparsec`: `consumedOffset`/`spanFromConsumed` (attoparsec
     reports no line/column, so position is recovered as characters consumed).
   - `Tadka.Interop.GHC`: `spanFromSrcSpan` converting a GHC `SrcSpan` (with the

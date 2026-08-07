@@ -54,6 +54,7 @@ hand-written, rendered three different ways.
 module Main (main) where
 
 import Data.Text (Text)
+import Prettyprinter (pretty)
 import Tadka
 
 -- An error type. `uvSource` holds the file it happened in, `uvAt` is the
@@ -65,10 +66,13 @@ data UnboundVariable = UnboundVariable
   }
 
 -- No hand-written Diagnostic instance: this describes the shape, and
--- deriveDiagnostic generates the instance from it.
+-- deriveDiagnostic generates the instance from it. `specMessage` builds the
+-- headline text from `uvName`; leave it out (and add `deriving Show` to the
+-- type above) if `pretty . show` of the whole record is good enough for you.
 deriveDiagnostic
   defaultSpec
     { specCode        = Just "demo::E0001"
+    , specMessage     = Just [| \e -> "undefined variable `" <> pretty (uvName e) <> "`" |]
     , specHelp        = Just "check for typos, or import the module that defines it"
     , specUrl         = Just "https://example.org/errors/E0001"
     , specSourceField = Just 'uvSource
@@ -100,14 +104,14 @@ Run it (`cabal run` or `runghc`, once `tadka` is a dependency) and you should
 see something close to:
 
 ```
-error: [demo::E0001] undefined variable
-┌─ Main.hs:1:15
-│
+error[demo::E0001]: undefined variable `foo`
+  ┌─ Main.hs:1:15
+  │
 1 │ main = print (foo + 1)
-│               ^^^ not in scope
-│
-= help: check for typos, or import the module that defines it
-= see: https://example.org/errors/E0001
+  │               ^^^ not found in this scope
+  │
+  = help: check for typos, or import the module that defines it
+  = see: https://example.org/errors/E0001
 ```
 
 followed by the same information again as a couple of plain-English
@@ -135,6 +139,11 @@ or, if you have `make`:
 make build
 make test
 ```
+
+`cabal test all` runs the three test suites (`golden`, `props`, `interop`).
+`make test` runs those plus two extra discipline checks
+(`tools/check-generated.sh` and `tools/check-compile-fail.sh`) — the same
+set CI runs on every push.
 
 ## A note on where things stand
 
