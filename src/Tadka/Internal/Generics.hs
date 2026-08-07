@@ -11,23 +11,7 @@
 -- redundant-constraints check flags them. The guard is intentional.
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
--- | GHC-generics label-wiring (vision §6 "GHC-generics path, scoped
--- precisely", spec Phase 9). This derives __only__ 'context', for a record with
--- exactly one 'NamedSource'-typed field and one or more 'Span'-typed fields,
--- using each span field's record-selector name as its label text — by calling
--- the same 'buildContext' the derive macro and manual instances call.
---
--- It deliberately does __not__ touch @code@, @severity@, @help@, @url@,
--- @message@, or @diagnosticId@: those have no structural source, so a
--- generics-wired instance still needs a small hand-written completion of them
--- (each defaultable per the 'Tadka.Diagnostic' class). This is smaller than
--- "most of the ergonomics" — it is exactly one method. For the fuller ergonomic
--- path, use @deriveDiagnostic@ ("Tadka.Internal.TH").
---
--- The record shape is checked at compile time: a record with zero or several
--- 'NamedSource' fields, or no 'Span' field, is a type error — never a silent
--- guess about which field was meant.
---
+
 -- No compatibility guarantee.
 module Tadka.Internal.Generics
   ( genericContext

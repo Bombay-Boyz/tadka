@@ -1,12 +1,4 @@
--- | Character-display-width and grapheme-cluster-break lookups, backed by the
--- generated 'Tadka.Internal.Width.Table' (vision §0, Infrastructure; spec
--- Phase 1). A deliberately owned, versioned, regeneratable table rather than a
--- @text-icu@ dependency.
---
--- Phase 1 exposes the table and its point lookups ('charWidth', 'textWidth',
--- 'graphemeBreakProperty', 'isExtendedPictographic'). The full UAX #29
--- segmentation algorithm that consumes these lives with its caret-alignment
--- use site in the graphical handler.
+
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Width

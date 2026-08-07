@@ -1,15 +1,4 @@
--- | The single, renderer-agnostic @related@-chain traversal. Phases 5, 6, and 7 each call this rather than re-deriving /when/ a
--- chain terminates; a handler only decides /how/ to render each termination
--- reason. Factoring it here is what keeps "distinct truncation shapes for
--- depth-limit vs. cycle, in every handler including JSON" achievable without
--- three copies of the logic drifting apart.
---
--- The walk carries a depth budget (a plain 'Natural'; Phase 4 threads
--- @Config@'s @withRelatedDepthLimit@ into it — a one-directional consumer
--- relationship, not a dependency of this module on Phase 4) and a
--- @Set DiagnosticId@ of ids seen on the current path. Production termination is
--- always guaranteed by the finite depth budget; cycle detection via
--- 'diagnosticId' is the sharper, opt-in refinement.
+
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Related

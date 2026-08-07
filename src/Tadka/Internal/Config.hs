@@ -1,8 +1,4 @@
--- | Rendering configuration and the render 'Target'. The 'Config'
--- constructor is not exported: values are built from 'defaultConfig' via the
--- @with*@ setters. 'selectRenderer' (in "Tadka.Internal.Render") is the only
--- reader of the internal field accessors, and the only place a @Config@ turns
--- into a renderer.
+
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Config
@@ -118,9 +114,7 @@ withRelatedDepthLimit n c = c { configRelatedDepth = n }
 withTabWidth :: Int -> Config -> Config
 withTabWidth n c = c { configTabWidth = n }
 
--- | Show @n@ lines of context above and below each labelled line and elide the
--- gaps between distant labels. Unset (the default) renders the contiguous range
--- from the first to the last labelled line, with no elision.
+
 withContextLines :: Int -> Config -> Config
 withContextLines n c = c { configContextLines = Just n }
 

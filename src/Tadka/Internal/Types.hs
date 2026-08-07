@@ -1,18 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Primitive validated types and their smart constructors (vision §2 partial,
--- §4, §5 partial; spec Phase 1).
---
--- Every type here follows the same discipline: the raw newtype/record
--- constructor is /not/ exported, so the only way to obtain a value is through a
--- smart constructor that has already enforced the type's invariant. Downstream
--- code therefore never re-checks these invariants ("make illegal states
--- unrepresentable").
---
--- No compatibility guarantee (internal module). The public, stable names are
--- re-exported from "Tadka"; the two @unsafe*@ constructors are re-exported from
--- "Tadka.Internal" for splice-time use only and never reach "Tadka".
+
 module Tadka.Internal.Types
   ( -- * Offsets and lengths
     Offset

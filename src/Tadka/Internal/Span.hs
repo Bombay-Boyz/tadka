@@ -4,16 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
--- | Resolution-indexed spans. A 'Span' names a position in some
--- source; a 'ResolvedSpan' is one that has been checked against a specific
--- 'NamedSource' and additionally carries its start/end 'LineCol'. The type
--- index makes "unchecked" and "checked" distinct types, so a renderer can only
--- ever be handed positions that were already validated.
---
--- 'ResolvedSpan' carries positions only — never owned text (v5 changelog fix).
--- The source text lives once per 'Tadka.Internal.Context.Context'; the renderer
--- slices whatever substring it needs with @Text.take@ / @Text.drop@ (O(1),
--- buffer-sharing) against that single stored source.
+
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Span
@@ -106,13 +97,7 @@ resolvedStart (ResolvedSpan _ _ s _) = s
 resolvedEnd :: ResolvedSpan -> LineCol
 resolvedEnd (ResolvedSpan _ _ _ e) = e
 
--- | Why a span failed to resolve. 'resolveSpan', working from raw offsets,
--- only ever reports out-of-bounds — 'StaleReason' has exactly one
--- constructor because that is the only failure mode any producer in this
--- library can construct today. (A previously-present 'SourceMismatch'
--- constructor had no producer and was removed; see CHANGELOG.md. Real
--- source-identity tracking, if ever added, is new scope for a future
--- producer, not a reason to keep an unreachable constructor "just in case".)
+
 data StaleReason
   = SpanOutOfBounds
   deriving (Eq, Show)
