@@ -71,7 +71,7 @@ library
                     Tadka.Internal.Renderer.Layout
                     Tadka.Internal.TH
                     Tadka.Internal.Generics
-                    Tadka.Internal.Interop
+                    
   -- Generated, checked-in Unicode table (regenerate via tools/gen-width-table.hs):
   other-modules:    Tadka.Internal.Width.Table
   -- Dependency pins widened for multi-GHC support: GHC 9.4.7 through 9.14.1
