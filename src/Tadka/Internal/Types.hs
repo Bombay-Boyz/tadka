@@ -168,7 +168,7 @@ matchesCodeGrammar t =
       _              -> False
 
 -- | Internal only: wrap already-validated text with no checks. Used by the
--- derive macro after splice-time validation (Phase 8). Never reachable from
+-- derive macro after splice-time validation. Never reachable from
 -- "Tadka".
 unsafeDiagnosticCode :: Text -> DiagnosticCode
 unsafeDiagnosticCode = DiagnosticCode
@@ -198,7 +198,7 @@ mkUrl t
   | isJust (parseAbsoluteURI (T.unpack t)) = Right (Url t)
   | otherwise                           = Left (NotAbsoluteUri t)
 
--- | Internal only: wrap already-validated text with no checks (Phase 8).
+-- | Internal only: wrap already-validated text with no checks.
 unsafeUrl :: Text -> Url
 unsafeUrl = Url
 
@@ -214,8 +214,8 @@ data Severity
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | The display strings for a severity, kept in one place so the graphical
--- (Phase 5) and narratable (Phase 6) handlers read from a single source of
--- truth rather than scattered literals. The JSON handler (Phase 7) uses
+-- and narratable handlers read from a single source of
+-- truth rather than scattered literals. The JSON handler uses
 -- 'severityJsonTag' instead.
 data SeverityLabels = SeverityLabels
   { severityGraphicalHeader  :: !Text  -- ^ e.g. @"error:"@
@@ -230,7 +230,7 @@ severityLabels = \case
   SevWarning -> SeverityLabels "warning:" "Warning,"
   SevError   -> SeverityLabels "error:"   "Error,"
 
--- | The bare lowercase JSON tag for a 'Severity' (Phase 7).
+-- | The bare lowercase JSON tag for a 'Severity'.
 severityJsonTag :: Severity -> Text
 severityJsonTag = \case
   SevAdvice  -> "advice"
@@ -242,7 +242,7 @@ severityJsonTag = \case
 -- ---------------------------------------------------------------------------
 
 -- | An opaque identity key used only to detect cycles in @related@ chains
--- (vision §5). Any 'Text' is a valid id, so 'mkDiagnosticId' is total; the
+-- . Any 'Text' is a valid id, so 'mkDiagnosticId' is total; the
 -- constructor stays hidden so an invariant could be added later without an API
 -- break.
 newtype DiagnosticId = DiagnosticId Text

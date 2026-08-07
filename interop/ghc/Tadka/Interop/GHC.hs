@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | One-directional adapter: GHC 'SrcSpan' → tadka 'Span' (spec Phase 10).
+-- | One-directional adapter: GHC 'SrcSpan' → tadka 'Span'.
 --
 -- A plain function against Phase 1/2 types; no core module depends on this.
 -- Targets GHC 9.4.7 through 9.14.1 (see the @ghc@ bound in @tadka.cabal@).

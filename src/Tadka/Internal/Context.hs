@@ -19,7 +19,7 @@
 -- 'mkContextMultiDegrading'), not a second copy of the resolution logic.
 --
 -- @buildContext@ is the single, plain, independently-testable dispatch that
--- both the derive macro (Phase 8) and hand-written instances call; landing it
+-- both the derive macro and hand-written instances call; landing it
 -- here (not in Phase 8) is what lets the macro stay "provably thin" — it only
 -- has to generate a call to this already-proven function. The derive macro
 -- and 'Tadka.Internal.Generics.genericContext' remain single-source only in

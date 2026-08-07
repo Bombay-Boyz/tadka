@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The @deriveDiagnostic@ Template Haskell splice (vision §6, spec Phase 8):
+-- | The @deriveDiagnostic@ Template Haskell splice:
 -- an ordinary @Q@-monad splice, validated via 'reify', that generates a
 -- 'Diagnostic' instance whose every method body is a direct, unmodified call to
 -- a plain function exported from "Tadka.Internal" (or a class default) — so the

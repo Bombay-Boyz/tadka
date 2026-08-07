@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Graphical report handler (vision §7, spec Phase 5): header, gutter/snippet
+-- | Graphical report handler: header, gutter/snippet
 -- layout with Unicode-width-correct carets, per-label underline cycling, stale
 -- labels, help/see lines, and related-chain nesting via the shared Phase 3 walk.
 --
@@ -174,7 +174,7 @@ labelDisplayStyle :: Severity -> NonEmpty AnsiStyle -> LabelKind -> Int -> AnsiS
 labelDisplayStyle sev _       Primary   _ = severityStyle sev
 labelDisplayStyle _   palette Secondary i = labelStyle palette i
 
--- | The palette entry for label index @i@ (vision §7): entry @i `mod` p@ where
+-- | The palette entry for label index @i@: entry @i `mod` p@ where
 -- @p@ is the palette length. Shares 'cyclePick''s cycling logic with
 -- 'caretGlyph' — proven once, used twice.
 labelStyle :: NonEmpty AnsiStyle -> Int -> AnsiStyle

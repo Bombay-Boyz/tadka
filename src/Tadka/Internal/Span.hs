@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 
--- | Resolution-indexed spans (vision §2). A 'Span' names a position in some
+-- | Resolution-indexed spans. A 'Span' names a position in some
 -- source; a 'ResolvedSpan' is one that has been checked against a specific
 -- 'NamedSource' and additionally carries its start/end 'LineCol'. The type
 -- index makes "unchecked" and "checked" distinct types, so a renderer can only

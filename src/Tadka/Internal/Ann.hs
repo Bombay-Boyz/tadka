@@ -1,4 +1,4 @@
--- | A renderer-agnostic annotation vocabulary for diagnostic prose (vision §3).
+-- | A renderer-agnostic annotation vocabulary for diagnostic prose.
 --
 -- @message@, @help@, and label text are all @Doc Ann@ — never @Doc AnsiStyle@ —
 -- so the semantic content an author writes (a keyword, a filename, emphasis) is

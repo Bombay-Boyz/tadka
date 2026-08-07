@@ -6,7 +6,7 @@
 -- Phase 1 exposes the table and its point lookups ('charWidth', 'textWidth',
 -- 'graphemeBreakProperty', 'isExtendedPictographic'). The full UAX #29
 -- segmentation algorithm that consumes these lives with its caret-alignment
--- use site in the graphical handler (Phase 5).
+-- use site in the graphical handler.
 --
 -- No compatibility guarantee.
 module Tadka.Internal.Width

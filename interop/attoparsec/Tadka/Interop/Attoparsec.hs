@@ -1,5 +1,5 @@
 -- | One-directional adapter: attoparsec failure positions → tadka
--- 'Offset'\/'Span' (spec Phase 10). attoparsec is position-agnostic (it reports
+-- 'Offset'\/'Span'. attoparsec is position-agnostic (it reports
 -- no line/column), so position is recovered as the number of characters
 -- consumed before the failure: @length original - length remaining@.
 -- Minimum supported: @attoparsec >= 0.14@.

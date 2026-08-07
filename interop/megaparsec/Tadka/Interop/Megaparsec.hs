@@ -1,5 +1,5 @@
 -- | One-directional adapter: megaparsec parse-error positions → tadka 'Span'
--- (spec Phase 10). megaparsec carries a stream 'errorOffset' (a character
+-- . megaparsec carries a stream 'errorOffset' (a character
 -- offset), the natural bridge to tadka's offset-based spans.
 -- Minimum supported: @megaparsec >= 9.0@.
 --

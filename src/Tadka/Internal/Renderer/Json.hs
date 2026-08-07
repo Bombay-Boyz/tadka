@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | JSON report handler (vision §7, spec Phase 7): the machine-readable
+-- | JSON report handler: the machine-readable
 -- renderer. @Output 'TJson = Aeson.Value@ is produced only here, from a
 -- dedicated 'DiagnosticDTO' — never by @deriving ToJSON@ on a
 -- @Diagnostic@-bearing type. @ToJSON@ only in v1; a reviewed @FromJSON@ decode
@@ -51,7 +51,7 @@ newtype JsonOptions = JsonOptions
 -- | One label in the DTO. @line@\/@column@\/@length@ are 'Nothing' (JSON null)
 -- when the label is stale; @stale@ always reflects
 -- 'Tadka.Internal.Context.LabelState' explicitly. @file@ is always present
--- (Phase 12): it names the source the label belongs to, even when the label
+-- : it names the source the label belongs to, even when the label
 -- is stale, so a machine consumer never has to infer which file a label was
 -- meant for from position alone.
 data LabelDTO = LabelDTO

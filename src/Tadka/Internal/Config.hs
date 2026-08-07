@@ -1,4 +1,4 @@
--- | Rendering configuration and the render 'Target' (vision §7). The 'Config'
+-- | Rendering configuration and the render 'Target'. The 'Config'
 -- constructor is not exported: values are built from 'defaultConfig' via the
 -- @with*@ setters. 'selectRenderer' (in "Tadka.Internal.Render") is the only
 -- reader of the internal field accessors, and the only place a @Config@ turns
@@ -42,7 +42,7 @@ import           Prettyprinter.Render.Terminal (AnsiStyle, Color (..), color)
 import           Tadka.Internal.Related        (defaultRelatedDepth)
 
 -- | The three render targets @tadka@ ships. Closed by design: a fourth,
--- custom target is permanently out of scope (vision §7).
+-- custom target is permanently out of scope.
 data Target = TGraphical | TNarratable | TJson
   deriving (Eq, Show, Enum, Bounded)
 
@@ -74,7 +74,7 @@ data Config = Config
   }
   deriving (Eq, Show)
 
--- | The default six-colour underline palette (vision §7), distinguishable
+-- | The default six-colour underline palette, distinguishable
 -- under light and dark themes; degrades to distinct underline characters under
 -- 'ColorNever' (handled by the graphical handler in Phase 5).
 defaultPalette :: NonEmpty AnsiStyle

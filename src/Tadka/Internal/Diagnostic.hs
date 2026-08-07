@@ -1,8 +1,8 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
--- | The 'Diagnostic' typeclass (vision §1) — the single interface every
+-- | The 'Diagnostic' typeclass — the single interface every
 -- renderer consumes — and the 'SomeDiagnostic' existential used for @related@
--- chains (vision §5).
+-- chains.
 --
 -- 'message' is the only mandatory method: no default, and deliberately no
 -- @Show@ superclass, so a concrete error type may @deriving (Show)@ for its own

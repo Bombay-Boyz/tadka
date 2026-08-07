@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Narratable (accessibility-first) report handler (vision §7, spec Phase 6):
+-- | Narratable (accessibility-first) report handler:
 -- prose, not layout. Every field the graphical handler can show has a prose
 -- equivalent here — nothing is silently dropped between renderers.
 --

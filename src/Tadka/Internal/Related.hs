@@ -1,5 +1,4 @@
--- | The single, renderer-agnostic @related@-chain traversal (vision §5, spec
--- Phase 3). Phases 5, 6, and 7 each call this rather than re-deriving /when/ a
+-- | The single, renderer-agnostic @related@-chain traversal. Phases 5, 6, and 7 each call this rather than re-deriving /when/ a
 -- chain terminates; a handler only decides /how/ to render each termination
 -- reason. Factoring it here is what keeps "distinct truncation shapes for
 -- depth-limit vs. cycle, in every handler including JSON" achievable without

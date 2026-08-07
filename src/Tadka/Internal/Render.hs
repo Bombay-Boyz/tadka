@@ -4,7 +4,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | The single path from 'Config' to a constructible renderer (vision §7).
+-- | The single path from 'Config' to a constructible renderer.
 --
 -- 'selectRenderer' is the only function that builds a @*Options@ value or wraps
 -- one in a 'Renderer' constructor, and the only reader of 'Config''s fields —
@@ -46,7 +46,7 @@ import           Tadka.Internal.Renderer.Json
 import           Tadka.Internal.Renderer.Narratable
                    (NarratableOptions (..), renderNarratable)
 
--- | The output type each target renders to. Closed family (vision §7).
+-- | The output type each target renders to. Closed family.
 type family Output (t :: Target) where
   Output 'TGraphical  = Doc Ann
   Output 'TNarratable = Text

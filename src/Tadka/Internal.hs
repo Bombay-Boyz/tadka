@@ -2,7 +2,7 @@
 -- macro ("Tadka.Internal.TH", Phase 8) and hand-written 'Tadka.Diagnostic'
 -- instances call.
 --
--- __The @deriveDiagnostic@ discipline (vision §6).__ Every method body the
+-- __The @deriveDiagnostic@ discipline.__ Every method body the
 -- splice generates must be a direct, unmodified call to a function that also
 -- lives in this module's export list (or a class default), so a manual instance
 -- can invoke the exact same code path. If a future field needs logic the
