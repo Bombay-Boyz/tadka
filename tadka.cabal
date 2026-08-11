@@ -20,6 +20,7 @@ build-type:         Simple
 tested-with:        GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
 extra-doc-files:    CHANGELOG.md
                     README.md
+extra-source-files: test/golden/fixtures/*.txt
 
 -- Treat warnings as errors during development and CI, but not in released
 -- builds: new GHC versions add warnings that would otherwise break downstream
