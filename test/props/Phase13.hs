@@ -16,6 +16,7 @@
 -- any real 'deriveDiagnosticSum' consumer with a similarly heterogeneous
 -- sum type hits the same tradeoff and makes the same call locally.
 {-# OPTIONS_GHC -Wno-partial-fields #-}
+{-# OPTIONS_GHC -Wno-partial-fields -Wno-incomplete-record-selectors #-}
 
 
 module Phase13 (group) where
