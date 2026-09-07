@@ -1,6 +1,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE CPP #-}
 
 -- | Every constructor below needs its own source/span/message shape, so at
 -- least one field per constructor (the payload distinguishing that variant)
@@ -16,7 +17,9 @@
 -- any real 'deriveDiagnosticSum' consumer with a similarly heterogeneous
 -- sum type hits the same tradeoff and makes the same call locally.
 {-# OPTIONS_GHC -Wno-partial-fields #-}
-{-# OPTIONS_GHC -Wno-partial-fields -Wno-incomplete-record-selectors #-}
+#if __GLASGOW_HASKELL__ >= 910
+{-# OPTIONS_GHC -Wno-incomplete-record-selectors #-}
+#endif
 
 
 module Phase13 (group) where
