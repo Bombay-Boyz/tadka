@@ -122,6 +122,8 @@ test-suite golden
 -- Property (Hedgehog) test suite: independently runnable (`cabal test props`).
 test-suite props
   import:           warnings
+  if impl(ghc >= 9.10)
+      ghc-options:    -Wno-incomplete-record-selectors
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test/props
   main-is:          Main.hs
