@@ -112,12 +112,12 @@ test-suite golden
   hs-source-dirs:   test/golden
   main-is:          Main.hs
   other-modules:    Fixtures
-  build-depends:    base
+  build-depends:    base                  >=4.18 && <4.23
                   , tadka
-                  , text
-                  , aeson
-                  , prettyprinter
-                  , template-haskell
+                  , text                  >=2.0  && <2.3
+                  , aeson                 >=2.1  && <2.4
+                  , prettyprinter         >=1.7  && <1.8
+                  , template-haskell      >=2.20 && <2.25
 
 -- Property (Hedgehog) test suite: independently runnable (`cabal test props`).
 test-suite props
@@ -151,14 +151,14 @@ test-suite props
                     MultiLine
                     EdgeCases
                     GenDiag
-  build-depends:    base
+  build-depends:    base                          >=4.18 && <4.23
                   , tadka
-                  , text
-                  , aeson
-                  , prettyprinter
-                  , prettyprinter-ansi-terminal
-                  , template-haskell
-                  , hedgehog
+                  , text                          >=2.0  && <2.3
+                  , aeson                         >=2.1  && <2.4
+                  , prettyprinter                 >=1.7  && <1.8
+                  , prettyprinter-ansi-terminal   >=1.1  && <1.2
+                  , template-haskell              >=2.20 && <2.25
+                  , hedgehog                      >=1.7  && <1.8
 
 -- One-directional interop adapters. Each is a separate sub-library so the core
 -- library never depends on a parser package; core modules cannot import these.
@@ -176,37 +176,46 @@ library interop-ghc
   -- accessors, which have been stable public GHC API since long before 9.4;
   -- no CPP has been needed for the range below, but that should be confirmed
   -- by an actual per-version build in CI, not assumed from the bound alone.
-  build-depends:    base, tadka, text, ghc >=9.6 && <9.15
+  build-depends:    base       >=4.18 && <4.23
+                  , tadka
+                  , text       >=2.0  && <2.3
+                  , ghc        >=9.6  && <9.15
 
 library interop-megaparsec
   import:           warnings
   visibility:       public
   hs-source-dirs:   interop/megaparsec
   exposed-modules:  Tadka.Interop.Megaparsec
-  build-depends:    base, tadka, text, megaparsec >=9.0 && <9.9
+  build-depends:    base        >=4.18 && <4.23
+                  , tadka
+                  , text        >=2.0  && <2.3
+                  , megaparsec  >=9.0  && <9.9
 
 library interop-attoparsec
   import:           warnings
   visibility:       public
   hs-source-dirs:   interop/attoparsec
   exposed-modules:  Tadka.Interop.Attoparsec
-  build-depends:    base, tadka, text, attoparsec >=0.14 && <0.15
+  build-depends:    base        >=4.18 && <4.23
+                  , tadka
+                  , text        >=2.0  && <2.3
+                  , attoparsec  >=0.14 && <0.15
 
 test-suite interop
   import:           warnings
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test/interop
   main-is:          Main.hs
-  build-depends:    base
+  build-depends:    base                       >=4.18 && <4.23
                   , tadka
                   , tadka:interop-ghc
                   , tadka:interop-megaparsec
                   , tadka:interop-attoparsec
-                  , text
-                  , containers
-                  , megaparsec >=9.0
-                  , attoparsec >=0.14
-                  , ghc
+                  , text                       >=2.0  && <2.3
+                  , containers                 >=0.6  && <0.9
+                  , megaparsec                 >=9.0  && <9.9
+                  , attoparsec                 >=0.14 && <0.15
+                  , ghc                        >=9.6  && <9.15
 
 source-repository head
   type:     git
