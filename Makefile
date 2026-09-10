@@ -1,12 +1,7 @@
 # Convenience targets. Each test suite is independently runnable, per the
 # Phase 0 exit criteria and the cross-phase note "testing is not deferred."
 
-.PHONY: build test test-golden test-props test-interop check-generated check-compile-fail clean gen-width-table format format-check
-
-# All first-party Haskell sources: library, both test suites, the three
-# interop sub-libraries, and the standalone tools/ scripts. Kept as one
-# variable so format/format-check always agree on what "the codebase" is.
-HS_SOURCES := $(shell find src test interop tools -name '*.hs')
+.PHONY: build test test-golden test-props test-interop check-generated check-compile-fail clean gen-width-table
 
 build:
 	cabal build all
