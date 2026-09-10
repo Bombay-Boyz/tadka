@@ -39,8 +39,7 @@ below) to move around.
 
 ## Installing
 
-Not on Hackage yet. For now, point at it as a source or git dependency in
-your `cabal.project`. It needs GHC 9.6 or newer.
+Needs GHC 9.6 or newer.
 
 ## A quick example
 
