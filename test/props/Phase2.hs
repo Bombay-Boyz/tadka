@@ -25,6 +25,7 @@ import           Tadka.Internal     (buildContext)
 group :: Group
 group = Group "Phase 2 - span resolution & context"
   [ ("resolveSpan stays within source bounds",              prop_resolveInBounds)
+  , ("resolveSpan handles overflowing span end",             prop_resolveOverflow)
   , ("mkContext is Left iff any span is out of bounds",     prop_mkContextStrict)
   , ("mkContextDegrading never changes label count/order",  prop_degradingCount)
   , ("buildContext [] = NoContext",                         prop_buildContextEmpty)
@@ -77,6 +78,17 @@ prop_resolveInBounds = property $ do
           l = unLength (spanLength rs)
       assert (o >= 0)
       assert (o + l <= T.length (sourceText src))
+
+prop_resolveOverflow :: Property
+prop_resolveOverflow = withTests 1 . property $ do
+  src <- forAll genNamedSource
+  sp  <- either (const failure) pure (mkSpan maxBound 1)
+  case resolveSpan src sp of
+    Left err -> do
+      let expectedEnd = toInteger (maxBound :: Int) + 1
+      spanErrorSpanEnd err === expectedEnd
+    Right _ ->
+      failure
 
 prop_mkContextStrict :: Property
 prop_mkContextStrict = property $ do

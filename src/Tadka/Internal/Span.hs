@@ -104,8 +104,8 @@ data StaleReason
 
 -- | The concrete failure returned by 'resolveSpan'.
 data SpanError = SpanOutOfBoundsError
-  { spanErrorSpanEnd     :: !Int  -- ^ offset + length (character index)
-  , spanErrorSourceChars :: !Int  -- ^ number of characters in the source
+  { spanErrorSpanEnd     :: !Integer  -- ^ offset + length (character index)
+  , spanErrorSourceChars :: !Int      -- ^ number of characters in the source
   }
   deriving (Eq, Show)
 
@@ -118,13 +118,24 @@ spanErrorReason SpanOutOfBoundsError{} = SpanOutOfBounds
 -- Offsets and lengths are measured in characters (code points).
 resolveSpan :: NamedSource -> Span -> Either SpanError ResolvedSpan
 resolveSpan src (RawSpan off len) =
-  if end > n
-    then Left (SpanOutOfBoundsError { spanErrorSpanEnd = end, spanErrorSourceChars = n })
-    else Right (ResolvedSpan off len (offsetToLineCol txt o) (offsetToLineCol txt end))
+  if end > toInteger n
+    then Left
+      (SpanOutOfBoundsError
+        { spanErrorSpanEnd = end
+        , spanErrorSourceChars = n
+        })
+    else
+      Right
+        (ResolvedSpan
+          off
+          len
+          (offsetToLineCol txt o)
+          (offsetToLineCol txt (fromInteger end)))
   where
     txt = sourceText src
     o   = unOffset off
-    end = o + unLength len
+    l   = unLength len
+    end = toInteger o + toInteger l
     n   = T.length txt
 
 -- | One-based line/column of a character offset into the text. Assumes
