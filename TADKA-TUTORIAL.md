@@ -213,7 +213,7 @@ $(deriveDiagnostic defaultSpec
     , specHelp        = Just "check for typos, or import the module that defines it"
     , specSourceField = Just 'uvSource
     , specLabelFields = [('uvAt, "not found in this scope")]
-    } 'UnboundVariable)
+    } ''UnboundVariable)
 
 main :: IO ()
 main =
@@ -358,7 +358,7 @@ $(deriveDiagnostic defaultSpec
         [('sbNewAt, "new binding here")]
     , specSecondaryLabelFields =
         [('sbOldAt, "previous binding was here")]
-    } 'ShadowedBinding)
+    } ''ShadowedBinding)
 ```
 
 Primary labels receive the more prominent treatment. Secondary labels remain
@@ -395,7 +395,7 @@ $(deriveDiagnostic defaultSpec
         Just 'msSource
     , specSecondaryLabelCollectionFields =
         [('msPrior, "shadowed here")]
-    } 'MultipleShadows)
+    } ''MultipleShadows)
 ```
 
 Each element of `msPrior` becomes a separate secondary label with the same
@@ -433,7 +433,7 @@ $(deriveDiagnostic defaultSpec
         [('ieAt, "this import")]
     , specCause =
         Just 'ieCause
-    } 'ImportError)
+    } ''ImportError)
 ```
 
 An underlying diagnostic can then be attached with:
@@ -552,7 +552,7 @@ $(deriveDiagnosticSum
           }
       )
     ]
-    'CompileError)
+    ''CompileError)
 
 main :: IO ()
 main =
