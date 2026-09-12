@@ -1,13 +1,18 @@
 cabal-version:      3.0
 name:               tadka
 version:            2.0.0.0
-synopsis:           Structured diagnostic reports for Haskell, in the style of Rust's miette.
+synopsis:           Structured error diagnostics & source-span reporting 
+ like Rust's miette
 description:
-  A diagnostic reporting framework for Haskell, inspired by the shape of
-  Rust's @miette@: structured error types, three report renderers
-  (graphical, narratable, JSON), error codes with documentation links,
-  related-error chains, labeled multi-span source snippets across one or
-  more files, and derive-macro ergonomics.
+  Tadka is a Haskell library for structured error diagnostics and source-span
+  reporting. It turns ordinary error values into diagnostic reports with
+  source locations, labeled spans, error codes, severity, help text,
+  documentation URLs, related diagnostics, and underlying causes. It provides
+  graphical terminal, accessible prose, and JSON renderers, with support for
+  diagnostics spanning multiple source files. Tadka also provides integrations
+  for GHC SrcSpan, Megaparsec, and Attoparsec, plus Template Haskell derivation
+  support for reducing diagnostic boilerplate. It is inspired by Rust's miette
+  but is designed around Haskell's types and conventions.
 category:           Development, Error Handling
 license: MPL-2.0
 license-file:       LICENSE
