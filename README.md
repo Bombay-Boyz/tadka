@@ -18,7 +18,7 @@ designed around Haskell's types and conventions.
 A snapshot of the error produced by tadka is as under:
 
 
-![Tadka graphical diagnostic](assets/tadka-diagnostic.png)
+![Tadka graphical diagnostic](https://raw.githubusercontent.com/Bombay-Boyz/tadka/main/assets/tadka-diagnostic.png)
 
 
 ## Why tadka?
