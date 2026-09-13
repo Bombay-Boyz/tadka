@@ -15,6 +15,12 @@ analyzers, DSLs, and other developer tooling.
 It is inspired by Rust's [`miette`](https://github.com/zkat/miette), but is
 designed around Haskell's types and conventions.
 
+A snapshot of the error produced by tadka is as under:
+
+
+![Tadka graphical diagnostic](assets/tadka-diagnostic.png)
+
+
 ## Why tadka?
 
 **Tadka** adds a reporting layer to your existing error types. It does not
