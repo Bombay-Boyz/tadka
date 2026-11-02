@@ -10,5 +10,6 @@
   "related": [],
   "causes": [],
   "truncated": false,
-  "cycleOmitted": true
+  "cycleOmitted": true,
+  "schemaVersion": 1
 }

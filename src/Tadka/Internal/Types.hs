@@ -12,6 +12,8 @@ module Tadka.Internal.Types
   , unLength
   , mkLength
   , LengthError (..)
+    -- * Positions
+  , LineCol (..)
     -- * Named source
   , NamedSource
   , sourceName
@@ -86,6 +88,18 @@ mkLength :: Int -> Either LengthError Length
 mkLength n
   | n < 0     = Left (NegativeLength n)
   | otherwise = Right (Length n)
+
+-- ---------------------------------------------------------------------------
+-- LineCol
+-- ---------------------------------------------------------------------------
+
+-- | A one-based line and column. Columns count code points from the start of
+-- the line.
+data LineCol = LineCol
+  { lcLine   :: !Int
+  , lcColumn :: !Int
+  }
+  deriving (Eq, Ord, Show)
 
 -- ---------------------------------------------------------------------------
 -- NamedSource

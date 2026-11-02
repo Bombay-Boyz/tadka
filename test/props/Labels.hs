@@ -1,3 +1,4 @@
+
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -40,6 +41,7 @@ kindFix = buildContextWith src3
   ]
 
 data KindDiag = KindDiag
+
 instance Diagnostic KindDiag where
   message _ = "boom"
   context _ = kindFix
@@ -70,6 +72,7 @@ kindFix3 = buildContextWith src3
   ]
 
 data KindDiag3 = KindDiag3
+
 instance Diagnostic KindDiag3 where
   message _ = "boom"
   context _ = kindFix3
@@ -83,12 +86,18 @@ prop_glyphsSameKindDistinct = withTests 1 . property $ do
 
 prop_jsonFlag :: Property
 prop_jsonFlag = withTests 1 . property $ do
-  let labels = dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic KindDiag)))
+  let labels = dtoLabels
+        (toDTO CauseSummary 8 (walkRelated 8 (SomeDiagnostic KindDiag)))
   map ldPrimary labels === [False, True]        -- secondary first, primary second
 
 -- === derive (with secondary) == manual ====================================
 
-data DErr2 = DErr2 { d2src :: NamedSource, d2prim :: Span, d2sec :: Span, d2got :: Text }
+data DErr2 = DErr2
+  { d2src  :: NamedSource
+  , d2prim :: Span
+  , d2sec  :: Span
+  , d2got  :: Text
+  }
   deriving (Show)
 
 deriveDiagnostic defaultSpec
@@ -99,7 +108,12 @@ deriveDiagnostic defaultSpec
   }
   ''DErr2
 
-data MErr2 = MErr2 { m2src :: NamedSource, m2prim :: Span, m2sec :: Span, m2got :: Text }
+data MErr2 = MErr2
+  { m2src  :: NamedSource
+  , m2prim :: Span
+  , m2sec  :: Span
+  , m2got  :: Text
+  }
 
 instance Diagnostic MErr2 where
   message e = pretty ("undefined " <> m2got e)
@@ -139,6 +153,5 @@ group = Group "Primary/secondary labels"
   , ("JSON marks primary vs secondary explicitly",      prop_jsonFlag)
   , ("graphical uses ^ for primary, - for secondary",   prop_glyphs)
   , ("same-kind labels on one line get distinct glyphs", prop_glyphsSameKindDistinct)
-  , ("derived (with secondary) == manual, all handlers",prop_deriveEqualsManual)
+  , ("derived (with secondary) == manual, all handlers", prop_deriveEqualsManual)
   ]
-

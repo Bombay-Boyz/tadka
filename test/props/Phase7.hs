@@ -1,3 +1,4 @@
+
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -23,7 +24,7 @@ import           GenDiag                    (GD (..), genGD, selfJust, selfNothi
 import           Tadka
 import           Tadka.Internal             (buildContext)
 import           Tadka.Internal.Related     (walkRelated)
-import           Tadka.Internal.Renderer.Json (DiagnosticDTO (..), LabelDTO (..), toDTO)
+import           Tadka.Internal.Renderer.Json (LabelDTO (..), dtoLabels, toDTO)
 
 group :: Group
 group = Group "Phase 7 - JSON handler + DTO"
@@ -39,7 +40,8 @@ rightOrErr = either (error . show) id
 -- Build a one-label DTO for a diagnostic with the given span over "abcdef".
 labelOf :: Int -> Int -> LabelDTO
 labelOf off len =
-  case dtoLabels (toDTO 8 (walkRelated 8 (SomeDiagnostic d))) of
+  case dtoLabels
+         (toDTO CauseSummary 8 (walkRelated 8 (SomeDiagnostic d))) of
     (l:_) -> l
     []    -> error "labelOf: expected exactly one label"
   where

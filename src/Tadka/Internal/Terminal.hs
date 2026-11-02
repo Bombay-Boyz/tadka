@@ -9,6 +9,7 @@
 module Tadka.Internal.Terminal
   ( TerminalCaps (..)
   , detectTerminalCaps
+  , handleIsUnicode
   , resolveColor
   , resolveUnicode
   , resolveHyperlink
@@ -18,7 +19,8 @@ module Tadka.Internal.Terminal
 import           Data.Maybe          (isJust, listToMaybe)
 import qualified Data.Text           as T
 import           System.Environment  (lookupEnv)
-import           System.IO           (Handle, hIsTerminalDevice)
+import           Data.Char           (toUpper)
+import           System.IO           (Handle, hGetEncoding, hIsTerminalDevice)
 
 import           Tadka.Internal.Config (ColorMode (..), Config, HyperlinkMode (..),
                                         UnicodeMode (..), configColorMode,
@@ -31,7 +33,7 @@ data TerminalCaps = TerminalCaps
   { capIsTerminal      :: Bool   -- ^ the handle is an interactive terminal
   , capNoColor         :: Bool   -- ^ @NO_COLOR@ is present (any value)
   , capForceColor      :: Bool   -- ^ @CLICOLOR_FORCE@ is present and not @"0"@
-  , capUnicode         :: Bool   -- ^ the active locale looks UTF-8
+  , capUnicode         :: Bool   -- ^ the locale looks UTF-8 and the handle's own encoding is a Unicode one
   , capNoHyperlink     :: Bool   -- ^ @NO_HYPERLINK@ is present (any value)
   , capForceHyperlink  :: Bool   -- ^ @FORCE_HYPERLINK@ is present and not @"0"@
   }
@@ -52,12 +54,27 @@ detectTerminalCaps h = do
   term        <- hIsTerminalDevice h
   noColor     <- isJust <$> lookupEnv "NO_COLOR"
   force       <- maybe False (/= "0") <$> lookupEnv "CLICOLOR_FORCE"
-  uni         <- localeIsUtf8
+  localeUtf8  <- localeIsUtf8
+  handleUtf8  <- handleIsUnicode h
+  let uni = localeUtf8 && handleUtf8
   noHyper     <- isJust <$> lookupEnv "NO_HYPERLINK"
   forceHyper  <- maybe False (/= "0") <$> lookupEnv "FORCE_HYPERLINK"
   pure TerminalCaps { capIsTerminal = term, capNoColor = noColor
                     , capForceColor = force, capUnicode = uni
                     , capNoHyperlink = noHyper, capForceHyperlink = forceHyper }
+
+-- | Whether the handle's own text encoding is a Unicode one (UTF-8, UTF-16,
+-- UTF-32). The locale environment variables say what the terminal probably
+-- supports, but the encoding actually installed on the 'Handle' decides
+-- whether writing a non-ASCII character succeeds, and the two can differ
+-- (a C locale, an @hSetEncoding@ call, a binary-mode handle, which has no
+-- text encoding at all and is treated as not Unicode).
+handleIsUnicode :: Handle -> IO Bool
+handleIsUnicode h = do
+  menc <- hGetEncoding h
+  pure $ case menc of
+    Nothing  -> False
+    Just enc -> take 3 (map toUpper (show enc)) == "UTF"
 
 localeIsUtf8 :: IO Bool
 localeIsUtf8 = do

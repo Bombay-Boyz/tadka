@@ -10,5 +10,6 @@
     { "code": "tadka::E0042", "message": "type mismatch in `foo`" }
   ],
   "truncated": false,
-  "cycleOmitted": false
+  "cycleOmitted": false,
+  "schemaVersion": 1
 }

@@ -13,6 +13,24 @@
 module Tadka.Internal.TH
   ( DiagnosticSpec (..)
   , defaultSpec
+    -- * A flatter, declarative alternative to a 'defaultSpec' record update
+  , SpecEntry
+  , diagnosticSpec
+  , diagCode
+  , diagSeverity
+  , diagHelp
+  , diagUrl
+  , diagSource
+  , diagLabel
+  , diagSecondaryLabel
+  , diagLabelCollection
+  , diagSecondaryLabelCollection
+  , diagLabelCollectionWith
+  , diagSecondaryLabelCollectionWith
+  , diagRelated
+  , diagCause
+  , diagId
+  , diagMessage
   , deriveDiagnostic
   , DiagnosticSumSpec
   , deriveDiagnosticSum
@@ -29,6 +47,7 @@ import           Tadka.Internal             (buildContext, buildContextWith,
                                              unsafeDiagnosticCode, unsafeUrl)
 import           Tadka.Internal.Context     (Context (NoContext), LabelKind (..))
 import           Tadka.Internal.Diagnostic  (Diagnostic (..), SomeDiagnostic)
+import           Tadka.Internal.SourceCode  (SomeSource)
 import           Tadka.Internal.Span        (Span, SpanF)
 import           Tadka.Internal.Types       (DiagnosticId, NamedSource, Severity (..),
                                              mkDiagnosticCode, mkDiagnosticId, mkUrl)
@@ -40,7 +59,7 @@ data DiagnosticSpec = DiagnosticSpec
   , specSeverity    :: Severity
   , specHelp        :: Maybe Text
   , specUrl         :: Maybe Text         -- ^ validated by 'mkUrl' at splice time
-  , specSourceField :: Maybe Name         -- ^ must name a 'NamedSource'-typed field
+  , specSourceField :: Maybe Name         -- ^ must name a 'NamedSource'- or 'SomeSource'-typed field
   , specLabelFields :: [(Name, Text)]     -- ^ each 'Name' must name a 'Span'-typed field (primary)
   , specSecondaryLabelFields :: [(Name, Text)] -- ^ 'Span'-typed fields rendered as secondary labels
   , specLabelCollectionFields :: [(Name, Text)]
@@ -54,6 +73,26 @@ data DiagnosticSpec = DiagnosticSpec
   , specSecondaryLabelCollectionFields :: [(Name, Text)]
     -- ^ like 'specLabelCollectionFields', but each element is a secondary
     -- label — the collection counterpart of 'specSecondaryLabelFields'.
+  , specLabelCollectionFieldsWith :: [(Name, Q Exp)]
+    -- ^ the per-element-text counterpart of 'specLabelCollectionFields':
+    -- the 'Name' is carried for documentation and the splice-time
+    -- "does this field exist" check only (see 'validateSpecAgainstFields')
+    -- — the actual runtime value comes entirely from the paired @Q Exp@,
+    -- an @e -> [(Span, Text)]@ expression (quoted with @[| ... |]@)
+    -- evaluated once on the record value, already pairing each span with
+    -- its own label text. Unlike 'specLabelCollectionFields', which gives
+    -- every element in the named field the same literal 'Text', this lets
+    -- the text vary per element — e.g. one entry per prior binding of a
+    -- name, each labeled with that binding's own description. Because the
+    -- shape comes from an arbitrary expression rather than a plain field
+    -- reference, 'validateSpecAgainstFields' cannot check its return type
+    -- at splice time the way it does for 'specLabelCollectionFields'; a
+    -- mismatched type surfaces as an ordinary GHC error at the generated
+    -- 'context' method's own call site instead of a friendlier TH 'fail'.
+  , specSecondaryLabelCollectionFieldsWith :: [(Name, Q Exp)]
+    -- ^ like 'specLabelCollectionFieldsWith', but each element is a
+    -- secondary label — the collection counterpart of
+    -- 'specSecondaryLabelFields'.
   , specRelated     :: Maybe Name         -- ^ must name a @['SomeDiagnostic']@-typed field
   , specCause       :: Maybe Name         -- ^ must name a @Maybe SomeDiagnostic@-typed field
                                           --   (diagnosticCause's own return type — an exact
@@ -69,9 +108,102 @@ defaultSpec = DiagnosticSpec
   { specCode = Nothing, specSeverity = SevError, specHelp = Nothing, specUrl = Nothing
   , specSourceField = Nothing, specLabelFields = [], specSecondaryLabelFields = []
   , specLabelCollectionFields = [], specSecondaryLabelCollectionFields = []
+  , specLabelCollectionFieldsWith = [], specSecondaryLabelCollectionFieldsWith = []
   , specRelated = Nothing, specCause = Nothing
   , specId = Nothing, specMessage = Nothing
   }
+
+-- === A flatter, declarative builder, as a lower-risk alternative to a =====
+-- === hand-rolled QuasiQuoter ===============================================
+--
+-- The review this fix answers suggested "a QuasiQuoter closer to miette's
+-- @#[diagnostic(...)]@ block" as one way to narrow the gap between tadka's
+-- authoring experience and Rust's co-located attributes. A hand-written TH
+-- QuasiQuoter is a custom parser with no compiler to check it against in
+-- this environment, so it was deliberately not attempted here (see the
+-- project's own "do not hallucinate" discipline) — the risk of a subtly
+-- wrong parser is strictly higher than a builder made of plain, ordinarily
+-- typechecked functions. 'diagnosticSpec' and the 'diag*' combinators below
+-- are exactly that: no custom parsing, just a flatter, list-of-directives
+-- surface over the same 'DiagnosticSpec' record, so the one-field-at-a-time
+-- authoring experience reads closer to a co-located attribute list without
+-- introducing any new syntax GHC itself doesn't already parse.
+
+-- | One directive in a 'diagnosticSpec' list: a single field of
+-- 'DiagnosticSpec' to set (scalar fields) or append to (the label/collection
+-- lists). Opaque — constructed only by the 'diag*' combinators below, so a
+-- 'SpecEntry' is always one of exactly the directives this module defines.
+newtype SpecEntry = SpecEntry (DiagnosticSpec -> DiagnosticSpec)
+
+-- | Build a 'DiagnosticSpec' from a flat list of directives, applied in
+-- order starting from 'defaultSpec'. For a scalar field (code, severity,
+-- help, url, source, related, cause, id, message) a later directive
+-- overwrites an earlier one, exactly like writing the same field twice in a
+-- record update; for a label/collection field, each directive /appends/ one
+-- entry, so @['diagLabel' \'a "x", 'diagLabel' \'b "y"]@ means the same as
+-- @'specLabelFields' = [(\'a, "x"), (\'b, "y")]@, not the last one winning.
+diagnosticSpec :: [SpecEntry] -> DiagnosticSpec
+diagnosticSpec = foldl (\s (SpecEntry f) -> f s) defaultSpec
+
+diagCode :: Text -> SpecEntry
+diagCode t = SpecEntry (\s -> s { specCode = Just t })
+
+diagSeverity :: Severity -> SpecEntry
+diagSeverity sev = SpecEntry (\s -> s { specSeverity = sev })
+
+diagHelp :: Text -> SpecEntry
+diagHelp t = SpecEntry (\s -> s { specHelp = Just t })
+
+diagUrl :: Text -> SpecEntry
+diagUrl t = SpecEntry (\s -> s { specUrl = Just t })
+
+-- | Set 'specSourceField'. Required before any 'diagLabel'/
+-- 'diagSecondaryLabel'/'diagLabelCollection'/'diagSecondaryLabelCollection'/
+-- 'diagLabelCollectionWith'/'diagSecondaryLabelCollectionWith' directive, just
+-- as 'specSourceField' is required alongside those spec fields directly (see
+-- 'requireSourceFieldForLabels').
+diagSource :: Name -> SpecEntry
+diagSource n = SpecEntry (\s -> s { specSourceField = Just n })
+
+diagLabel :: Name -> Text -> SpecEntry
+diagLabel n t = SpecEntry (\s -> s { specLabelFields = specLabelFields s ++ [(n, t)] })
+
+diagSecondaryLabel :: Name -> Text -> SpecEntry
+diagSecondaryLabel n t =
+  SpecEntry (\s -> s { specSecondaryLabelFields = specSecondaryLabelFields s ++ [(n, t)] })
+
+diagLabelCollection :: Name -> Text -> SpecEntry
+diagLabelCollection n t =
+  SpecEntry (\s -> s { specLabelCollectionFields = specLabelCollectionFields s ++ [(n, t)] })
+
+diagSecondaryLabelCollection :: Name -> Text -> SpecEntry
+diagSecondaryLabelCollection n t = SpecEntry
+  (\s -> s { specSecondaryLabelCollectionFields = specSecondaryLabelCollectionFields s ++ [(n, t)] })
+
+-- | See 'specLabelCollectionFieldsWith'.
+diagLabelCollectionWith :: Name -> Q Exp -> SpecEntry
+diagLabelCollectionWith n qe = SpecEntry
+  (\s -> s { specLabelCollectionFieldsWith = specLabelCollectionFieldsWith s ++ [(n, qe)] })
+
+-- | See 'specSecondaryLabelCollectionFieldsWith'.
+diagSecondaryLabelCollectionWith :: Name -> Q Exp -> SpecEntry
+diagSecondaryLabelCollectionWith n qe = SpecEntry
+  (\s -> s { specSecondaryLabelCollectionFieldsWith =
+               specSecondaryLabelCollectionFieldsWith s ++ [(n, qe)] })
+
+diagRelated :: Name -> SpecEntry
+diagRelated n = SpecEntry (\s -> s { specRelated = Just n })
+
+diagCause :: Name -> SpecEntry
+diagCause n = SpecEntry (\s -> s { specCause = Just n })
+
+diagId :: Name -> SpecEntry
+diagId n = SpecEntry (\s -> s { specId = Just n })
+
+-- | Set 'specMessage'. Without this directive the generated @message@ falls
+-- back to @pretty . show@, exactly as with 'defaultSpec' directly.
+diagMessage :: Q Exp -> SpecEntry
+diagMessage qe = SpecEntry (\s -> s { specMessage = Just qe })
 
 -- | Field kind for the @diagnosticId@ generator.
 data IdKind = IdText | IdDiag
@@ -90,6 +222,7 @@ deriveDiagnostic spec tyName = do
     , urlMethod (specUrl spec)
     , contextMethod (specSourceField spec) (specLabelFields spec) (specSecondaryLabelFields spec)
                     (specLabelCollectionFields spec) (specSecondaryLabelCollectionFields spec)
+                    (specLabelCollectionFieldsWith spec) (specSecondaryLabelCollectionFieldsWith spec)
     , relatedMethod (specRelated spec)
     , causeMethod (specCause spec)
     , diagIdMethod idInfo
@@ -107,13 +240,19 @@ deriveDiagnostic spec tyName = do
 validateSpecAgainstFields :: Name -> [(Name, Type)] -> DiagnosticSpec -> Q (Maybe (Name, IdKind))
 validateSpecAgainstFields tyName fields spec = do
   -- Validate field references and types (compile errors on mismatch).
-  mapM_ (\n -> expectHead fields n [''NamedSource] "specSourceField") (specSourceField spec)
+  mapM_ (\n -> expectHead fields n [''NamedSource, ''SomeSource] "specSourceField") (specSourceField spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specLabelFields") (specLabelFields spec)
   mapM_ (\(n, _) -> expectHead fields n [''Span, ''SpanF] "specSecondaryLabelFields") (specSecondaryLabelFields spec)
   mapM_ (\(n, _) -> expectListHead fields n [''Span, ''SpanF] "specLabelCollectionFields")
         (specLabelCollectionFields spec)
   mapM_ (\(n, _) -> expectListHead fields n [''Span, ''SpanF] "specSecondaryLabelCollectionFields")
         (specSecondaryLabelCollectionFields spec)
+  -- The "With" collection fields carry a 'Name' for documentation and this
+  -- existence check only; the actual value comes from the paired 'Q Exp',
+  -- not from reading this field, so there is no type shape to check here
+  -- (see 'specLabelCollectionFieldsWith').
+  mapM_ (\(n, _) -> fieldType fields n >> pure ())
+        (specLabelCollectionFieldsWith spec ++ specSecondaryLabelCollectionFieldsWith spec)
   mapM_ (validateRelated fields) (specRelated spec)
   mapM_ (validateCause fields) (specCause spec)
   idInfo <- traverse (\n -> (,) n <$> validateId fields n) (specId spec)
@@ -375,13 +514,15 @@ requireSourceFieldForLabels spec tyName = case specSourceField spec of
           ++ ") but specSourceField is Nothing, so no `context` method would "
           ++ "be generated at all and every one of those labels would be "
           ++ "silently dropped. Set specSourceField to the record's "
-          ++ "NamedSource field, or remove the label fields.")
+          ++ "NamedSource (or SomeSource) field, or remove the label fields.")
   where
     allLabelFieldNames =
          map fst (specLabelFields spec)
       ++ map fst (specSecondaryLabelFields spec)
       ++ map fst (specLabelCollectionFields spec)
       ++ map fst (specSecondaryLabelCollectionFields spec)
+      ++ map fst (specLabelCollectionFieldsWith spec)
+      ++ map fst (specSecondaryLabelCollectionFieldsWith spec)
 
 -- === Method generators (each body is a direct call to a shared function) ===
 
@@ -413,45 +554,52 @@ urlMethod Nothing  = pure Nothing
 urlMethod (Just t) = Just <$>
   funD 'url [clause [wildP] (normalB [| Just (unsafeUrl (pack $(strLit t))) |]) []]
 
-contextMethod :: Maybe Name -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)] -> Q (Maybe Dec)
-contextMethod Nothing _ _ _ _ = pure Nothing
-contextMethod (Just srcN) primFields secFields primColl secColl = do
+contextMethod :: Maybe Name -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)] -> [(Name, Text)]
+              -> [(Name, Q Exp)] -> [(Name, Q Exp)] -> Q (Maybe Dec)
+contextMethod Nothing _ _ _ _ _ _ = pure Nothing
+contextMethod (Just srcN) primFields secFields primColl secColl primCollWith secCollWith = do
   e <- newName "e"
   -- Body is a single direct call to a shared function: buildContext when every
-  -- label (fixed-field or collection) is primary, buildContextWith otherwise.
-  -- A collection field's list is expanded to one tuple per element, at the
-  -- same shape buildContext/buildContextWith already accept, then `concat`ed
-  -- in after the fixed-field tuples — buildContext/buildContextWith need no
-  -- change at all to accept however many that expansion produces at runtime,
-  -- including zero.
+  -- label (fixed-field, literal collection, or per-element-text "with"
+  -- collection) is primary, buildContextWith otherwise. A collection field's
+  -- list is expanded to one tuple per element, at the same shape
+  -- buildContext/buildContextWith already accept, then `concat`ed in after
+  -- the fixed-field tuples — buildContext/buildContextWith need no change at
+  -- all to accept however many that expansion produces at runtime, including
+  -- zero. A "with" collection's list is already @[(Span, Text)]@ (from its
+  -- own @Q Exp@, not a field access), so its per-element expansion differs
+  -- only in where the text comes from, not in the shape it produces.
   --
-  -- `null primColl`/`null secColl` are decided here at splice time (these are
-  -- plain lists in the 'DiagnosticSpec' value, not runtime record fields), so
-  -- a spec with no collection fields generates the exact same code this
-  -- function produced before collection labels existed — not merely
-  -- equivalent code with a harmless no-op tail appended.
-  body <- if null secFields && null secColl
+  -- `null primColl`/`null secColl`/etc. are decided here at splice time
+  -- (these are plain lists in the 'DiagnosticSpec' value, not runtime record
+  -- fields), so a spec with no collection fields at all generates the exact
+  -- same code this function produced before collection labels existed — not
+  -- merely equivalent code with a harmless no-op tail appended.
+  body <- if null secFields && null secColl && null secCollWith
             then do
               let single (lf, txt) = [| ($(varE lf) $(varE e), Just (pretty (pack $(strLit txt)))) |]
                   fixedList        = listE (map single primFields)
-              if null primColl
+                  coll (lf, txt)   = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                  collWith (_, qe) = [| [ (s, Just (pretty t)) | (s, t) <- $(qe) $(varE e) ] |]
+                  extraChunks      = map coll primColl ++ map collWith primCollWith
+              if null extraChunks
                 then [| buildContext ($(varE srcN) $(varE e)) $(fixedList) |]
-                else do
-                  let coll (lf, txt) = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
-                  [| buildContext ($(varE srcN) $(varE e))
-                       ($(fixedList) ++ concat $(listE (map coll primColl))) |]
+                else [| buildContext ($(varE srcN) $(varE e))
+                          ($(fixedList) ++ concat $(listE extraChunks)) |]
             else do
               let single k (lf, txt) = [| ($(varE lf) $(varE e), $(k), Just (pretty (pack $(strLit txt)))) |]
                   fixedEntries       = listE (map (single [| Primary |]) primFields
                                             ++ map (single [| Secondary |]) secFields)
-              if null primColl && null secColl
+                  coll k (lf, txt)   = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+                  collWith k (_, qe) = [| [ (s, $(k), Just (pretty t)) | (s, t) <- $(qe) $(varE e) ] |]
+                  extraChunks        = map (coll [| Primary |]) primColl
+                                     ++ map (coll [| Secondary |]) secColl
+                                     ++ map (collWith [| Primary |]) primCollWith
+                                     ++ map (collWith [| Secondary |]) secCollWith
+              if null extraChunks
                 then [| buildContextWith ($(varE srcN) $(varE e)) $(fixedEntries) |]
-                else do
-                  let coll k (lf, txt) = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
-                      collEntries      = listE (map (coll [| Primary |]) primColl
-                                              ++ map (coll [| Secondary |]) secColl)
-                  [| buildContextWith ($(varE srcN) $(varE e))
-                       ($(fixedEntries) ++ concat $(collEntries)) |]
+                else [| buildContextWith ($(varE srcN) $(varE e))
+                          ($(fixedEntries) ++ concat $(listE extraChunks)) |]
   Just <$> funD 'context [clause [varP e] (normalB (pure body)) []]
 
 relatedMethod :: Maybe Name -> Q (Maybe Dec)
@@ -515,32 +663,37 @@ contextMethodArm :: Name -> DiagnosticSpec -> Q Exp
 contextMethodArm e spec = case specSourceField spec of
   Nothing -> [| NoContext |]
   Just srcN ->
-    let primFields = specLabelFields spec
-        secFields  = specSecondaryLabelFields spec
-        primColl   = specLabelCollectionFields spec
-        secColl    = specSecondaryLabelCollectionFields spec
-    in if null secFields && null secColl
+    let primFields   = specLabelFields spec
+        secFields    = specSecondaryLabelFields spec
+        primColl     = specLabelCollectionFields spec
+        secColl      = specSecondaryLabelCollectionFields spec
+        primCollWith = specLabelCollectionFieldsWith spec
+        secCollWith  = specSecondaryLabelCollectionFieldsWith spec
+    in if null secFields && null secColl && null secCollWith
          then
            let single (lf, txt) = [| ($(varE lf) $(varE e), Just (pretty (pack $(strLit txt)))) |]
                fixedList         = listE (map single primFields)
-           in if null primColl
+               coll (lf, txt)    = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+               collWith (_, qe)  = [| [ (s, Just (pretty t)) | (s, t) <- $(qe) $(varE e) ] |]
+               extraChunks       = map coll primColl ++ map collWith primCollWith
+           in if null extraChunks
                 then [| buildContext ($(varE srcN) $(varE e)) $(fixedList) |]
-                else
-                  let coll (lf, txt) = [| [ (s, Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
-                  in [| buildContext ($(varE srcN) $(varE e))
-                          ($(fixedList) ++ concat $(listE (map coll primColl))) |]
+                else [| buildContext ($(varE srcN) $(varE e))
+                          ($(fixedList) ++ concat $(listE extraChunks)) |]
          else
            let single k (lf, txt) = [| ($(varE lf) $(varE e), $(k), Just (pretty (pack $(strLit txt)))) |]
                fixedEntries       = listE (map (single [| Primary |]) primFields
                                          ++ map (single [| Secondary |]) secFields)
-           in if null primColl && null secColl
+               coll k (lf, txt)   = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
+               collWith k (_, qe) = [| [ (s, $(k), Just (pretty t)) | (s, t) <- $(qe) $(varE e) ] |]
+               extraChunks        = map (coll [| Primary |]) primColl
+                                  ++ map (coll [| Secondary |]) secColl
+                                  ++ map (collWith [| Primary |]) primCollWith
+                                  ++ map (collWith [| Secondary |]) secCollWith
+           in if null extraChunks
                 then [| buildContextWith ($(varE srcN) $(varE e)) $(fixedEntries) |]
-                else
-                  let coll k (lf, txt) = [| [ (s, $(k), Just (pretty (pack $(strLit txt)))) | s <- $(varE lf) $(varE e) ] |]
-                      collEntries      = listE (map (coll [| Primary |]) primColl
-                                              ++ map (coll [| Secondary |]) secColl)
-                  in [| buildContextWith ($(varE srcN) $(varE e))
-                          ($(fixedEntries) ++ concat $(collEntries)) |]
+                else [| buildContextWith ($(varE srcN) $(varE e))
+                          ($(fixedEntries) ++ concat $(listE extraChunks)) |]
 
 relatedMethodArm :: Name -> DiagnosticSpec -> Q Exp
 relatedMethodArm e spec = case specRelated spec of

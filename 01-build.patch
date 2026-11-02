@@ -1,0 +1,1225 @@
+diff --git a/cabal.project b/cabal.project
+index f696ac5..8cf91da 100644
+--- a/cabal.project
++++ b/cabal.project
+@@ -1,6 +1,6 @@
+ -- Reproducible builds: the index-state pins the Hackage snapshot; bump
+ -- deliberately.
+-packages: .
++packages: . tadka-highlight
+ 
+ index-state: 2026-07-26T06:08:19Z
+ 
+@@ -13,3 +13,6 @@ tests: True
+ -- `werror` flag in tadka.cabal).
+ package tadka
+   flags: +werror
++
++package tadka-highlight
++  flags: +werror
+diff --git a/src/Tadka.hs b/src/Tadka.hs
+index 4d70c35..85b766e 100644
+--- a/src/Tadka.hs
++++ b/src/Tadka.hs
+@@ -66,7 +66,12 @@ module Tadka
+   , adHoc
+   , wrapErr
+   , intoDiagnostic
++  , fromError
+   , fromSomeException
++  , withCode
++  , withSeverity
++  , withHelp
++  , withUrl
+   , withSourceCode
+     -- * Context
+   , Context (NoContext)
+@@ -98,12 +103,13 @@ module Tadka
+   , withLabelPalette
+   , withTarget
+   , withCauseDetail
+-  , withHighlightMode
++  , withHighlighter
++  , withoutHighlighter
+   , ColorMode (..)
+   , UnicodeMode (..)
+   , HyperlinkMode (..)
+   , CauseDetail (..)
+-  , HighlightMode (..)
++  , Highlighter (..)
+     -- * Renderers and the render path
+   , Target (..)
+   , Output
+diff --git a/src/Tadka/Internal/AdHoc.hs b/src/Tadka/Internal/AdHoc.hs
+index 04afd1f..28d0f14 100644
+--- a/src/Tadka/Internal/AdHoc.hs
++++ b/src/Tadka/Internal/AdHoc.hs
+@@ -20,11 +20,16 @@ module Tadka.Internal.AdHoc
+   , adHoc
+   , wrapErr
+   , intoDiagnostic
++  , fromError
+   , fromSomeException
++  , withCode
++  , withSeverity
++  , withHelp
++  , withUrl
+   , withSourceCode
+   ) where
+ 
+-import           Control.Exception        (SomeException, displayException)
++import           Control.Exception        (Exception, SomeException, displayException)
+ import           Data.Text                 (Text)
+ import qualified Data.Text                 as T
+ import           Prettyprinter             (Doc, pretty)
+@@ -85,9 +90,18 @@ wrapErr msg e = (adHoc msg) { adHocCause = Just (SomeDiagnostic e) }
+ -- Deliberately asks for nothing but 'Show': that is exactly the bar
+ -- @std::error::Error@ itself sets (a @Display@ impl), so this is the direct
+ -- Haskell analogue, not a weaker substitute for it.
++-- | Turn any value with a 'Show' instance into an ad hoc diagnostic whose
++-- message is its 'show' output. 'show' is a debugging format, not a message:
++-- a 'String' or 'Text' comes out quoted and escaped. Prefer 'fromError' for
++-- exceptions, or 'adHoc' for text you already have.
+ intoDiagnostic :: Show e => e -> AdHocDiagnostic
+ intoDiagnostic = adHoc . T.pack . show
+ 
++-- | Turn any 'Exception' into an ad hoc diagnostic whose message is its
++-- 'displayException' text.
++fromError :: Exception e => e -> AdHocDiagnostic
++fromError = adHoc . T.pack . displayException
++
+ -- | Lift a caught 'SomeException' into a minimal 'Diagnostic', via its
+ -- 'displayException' rather than bare 'show' — the message each exception's
+ -- author already wrote to be user-facing, mirroring miette reading an
+@@ -106,3 +120,19 @@ fromSomeException = adHoc . T.pack . displayException
+ -- this twice keeps only the second source.
+ withSourceCode :: NamedSource -> [(Span, Maybe (Doc Ann))] -> AdHocDiagnostic -> AdHocDiagnostic
+ withSourceCode src labels d = d { adHocContext = buildContext src labels }
++
++-- | Attach a diagnostic code.
++withCode :: DiagnosticCode -> AdHocDiagnostic -> AdHocDiagnostic
++withCode c d = d { adHocCode = Just c }
++
++-- | Set the severity (the default is 'SevError').
++withSeverity :: Severity -> AdHocDiagnostic -> AdHocDiagnostic
++withSeverity s d = d { adHocSeverity = s }
++
++-- | Attach a help line.
++withHelp :: Text -> AdHocDiagnostic -> AdHocDiagnostic
++withHelp h d = d { adHocHelp = Just (pretty h) }
++
++-- | Attach a documentation URL.
++withUrl :: Url -> AdHocDiagnostic -> AdHocDiagnostic
++withUrl u d = d { adHocUrl = Just u }
+diff --git a/src/Tadka/Internal/Config.hs b/src/Tadka/Internal/Config.hs
+index 0f20fdb..e6e56d5 100644
+--- a/src/Tadka/Internal/Config.hs
++++ b/src/Tadka/Internal/Config.hs
+@@ -8,7 +8,7 @@ module Tadka.Internal.Config
+   , UnicodeMode (..)
+   , HyperlinkMode (..)
+   , CauseDetail (..)
+-  , HighlightMode (..)
++  , Highlighter (..)
+     -- * Config (opaque)
+   , Config
+   , defaultConfig
+@@ -23,7 +23,8 @@ module Tadka.Internal.Config
+   , withLabelPalette
+   , withTarget
+   , withCauseDetail
+-  , withHighlightMode
++  , withHighlighter
++  , withoutHighlighter
+     -- * Internal field accessors (for selectRenderer only; not re-exported by "Tadka")
+   , configColorMode
+   , configUnicodeMode
+@@ -34,7 +35,7 @@ module Tadka.Internal.Config
+   , configPalette
+   , configTarget
+   , configCauseDetail
+-  , configHighlightMode
++  , configHighlighter
+   ) where
+ 
+ import           Data.List.NonEmpty            (NonEmpty (..))
+@@ -74,27 +75,33 @@ data HyperlinkMode = HyperlinkAuto | HyperlinkAlways | HyperlinkNever
+ data CauseDetail = CauseSummary | CauseFull
+   deriving (Eq, Show, Enum, Bounded)
+ 
+--- | Whether — and how — to run source snippets through @skylighting@'s
+--- tokenizer before display, colourising recognised tokens the same way a
+--- syntax-aware editor would. Independent of 'ColorMode': highlighting is
+--- always suppressed under 'ColorNever' regardless of this setting, since an
+--- ANSI-coloured token stream has no plain-text form to degrade to that
+--- would still be useful. 'HighlightOff' is the default: every existing
+--- plain-text report (and golden fixture) is unchanged unless a caller opts
+--- in.
+-data HighlightMode
+-  = HighlightOff
+-    -- ^ never highlight (the default).
+-  | HighlightAuto
+-    -- ^ guess a syntax from each source's own name (usually a file path,
+-    -- matched by extension/filename glob); a source whose name doesn't
+-    -- match any known syntax renders as plain text, same as 'HighlightOff'.
+-  | HighlightLanguage Text
+-    -- ^ force a specific syntax by name (full name, short name, or
+-    -- extension — whatever @skylighting@'s own @lookupSyntax@ accepts),
+-    -- regardless of each source's own name. An unrecognised name renders as
+-    -- plain text, same as 'HighlightOff'.
+-  deriving (Eq, Show)
++-- | A syntax highlighter for source snippets, supplied by the application
++-- (or by the separate @tadka-highlight@ package). The core library has no
++-- tokenizer of its own and no dependency on one.
++--
++-- 'runHighlighter' receives the source's name (usually a file path) and
++-- /all/ of the source's lines, already tab-expanded and with control
++-- characters replaced by spaces. It returns 'Nothing' when it declines to
++-- highlight this source, or exactly one output line per input line. The
++-- renderer only accepts an output line if removing its SGR colour escapes
++-- (@ESC [ ... m@) gives back exactly the plain line, so a highlighter can add
++-- colour but can never change the text, move a caret, or inject any other
++-- terminal escape. A line failing that check is shown as plain text.
++--
++-- Highlighting is ignored under 'ColorNever'.
++data Highlighter = Highlighter
++  { highlighterName :: Text
++    -- ^ identifies the highlighter; the only thing 'Eq' and 'Show' compare\/show.
++  , runHighlighter  :: Text -> [Text] -> Maybe [Text]
++    -- ^ source name -> plain lines -> highlighted lines.
++  }
++
++instance Eq Highlighter where
++  a == b = highlighterName a == highlighterName b
++
++instance Show Highlighter where
++  showsPrec d h = showParen (d > 10) $
++    showString "Highlighter " . shows (highlighterName h)
+ 
+ -- | Opaque rendering configuration. Build from 'defaultConfig' with the
+ -- @with*@ setters.
+@@ -108,7 +115,7 @@ data Config = Config
+   , configContextLines  :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
+   , configTarget        :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
+   , configCauseDetail   :: CauseDetail    -- ^ summary line vs. full nested report per cause.
+-  , configHighlightMode :: HighlightMode  -- ^ off, auto-detected, or a forced syntax.
++  , configHighlighter   :: Maybe Highlighter  -- ^ 'Nothing' = plain snippets (the default).
+   }
+   deriving (Eq, Show)
+ 
+@@ -138,7 +145,7 @@ defaultConfig = Config
+   , configContextLines  = Nothing
+   , configTarget        = Nothing
+   , configCauseDetail   = CauseSummary
+-  , configHighlightMode = HighlightOff
++  , configHighlighter   = Nothing
+   }
+ 
+ withColorMode :: ColorMode -> Config -> Config
+@@ -175,7 +182,11 @@ withTarget t c = c { configTarget = Just t }
+ withCauseDetail :: CauseDetail -> Config -> Config
+ withCauseDetail d c = c { configCauseDetail = d }
+ 
+--- | Choose whether (and how) source snippets are syntax-highlighted.
+--- Defaults to 'HighlightOff'.
+-withHighlightMode :: HighlightMode -> Config -> Config
+-withHighlightMode m c = c { configHighlightMode = m }
++-- | Syntax-highlight source snippets with the given 'Highlighter'. Off by
++-- default.
++withHighlighter :: Highlighter -> Config -> Config
++withHighlighter h c = c { configHighlighter = Just h }
++
++-- | Turn syntax highlighting off (the default).
++withoutHighlighter :: Config -> Config
++withoutHighlighter c = c { configHighlighter = Nothing }
+diff --git a/src/Tadka/Internal/Exception.hs b/src/Tadka/Internal/Exception.hs
+index ed8d5f3..e2056bc 100644
+--- a/src/Tadka/Internal/Exception.hs
++++ b/src/Tadka/Internal/Exception.hs
+@@ -33,13 +33,14 @@ module Tadka.Internal.Exception
+ import           Control.Exception       (Exception (..), SomeException, catch, fromException,
+                                           throwIO)
+ import qualified Data.Text               as T
++import           System.IO               (stderr)
+ import           GHC.Conc                 (getUncaughtExceptionHandler,
+                                            setUncaughtExceptionHandler)
+ 
+ import           Tadka.Internal.Config    (CauseDetail (CauseSummary), Config)
+ import           Tadka.Internal.Diagnostic (Diagnostic, SomeDiagnostic (..))
+ import           Tadka.Internal.Related  (defaultRelatedDepth)
+-import           Tadka.Internal.Render   (reportDiagnostic)
++import           Tadka.Internal.Render   (reportDiagnosticTo)
+ import           Tadka.Internal.Renderer.Narratable
+                    (NarratableOptions (..), renderNarratable)
+ 
+@@ -96,8 +97,10 @@ catchDiagnostic action handler =
+ -- exception printer — the Haskell analogue of miette's @set_panic_hook@.
+ -- Once installed, an uncaught 'DiagnosticException' (however it was
+ -- thrown — 'throwDiagnostic' or a direct @throwIO@) prints as a full,
+--- capability-aware diagnostic report via 'Tadka.Internal.Render.reportDiagnostic'
+--- instead of GHC's default @show@ dump; any other uncaught exception still
++-- capability-aware diagnostic report, written to @stderr@ (colour and
++-- Unicode are detected against @stderr@, not @stdout@), instead of GHC's
++-- default @show@ dump. If rendering itself throws, the previously installed
++-- handler reports the exception instead; any other uncaught exception still
+ -- falls back to whichever handler was previously installed (GHC's own
+ -- default, unless something else already called this), completely
+ -- unchanged.
+@@ -116,5 +119,6 @@ installPanicHook cfg = do
+   where
+     handler :: (SomeException -> IO ()) -> SomeException -> IO ()
+     handler fallback se = case fromException se of
+-      Just (DiagnosticException (SomeDiagnostic e)) -> reportDiagnostic cfg e
+-      Nothing                                        -> fallback se
++      Just (DiagnosticException (SomeDiagnostic e)) ->
++        reportDiagnosticTo stderr cfg e `catch` \(_ :: SomeException) -> fallback se
++      Nothing -> fallback se
+diff --git a/src/Tadka/Internal/Highlight.hs b/src/Tadka/Internal/Highlight.hs
+index 21959b9..988629f 100644
+--- a/src/Tadka/Internal/Highlight.hs
++++ b/src/Tadka/Internal/Highlight.hs
+@@ -1,87 +1,62 @@
+ {-# LANGUAGE OverloadedStrings #-}
+ 
+--- | Optional ANSI syntax highlighting of source snippets in the graphical
+--- renderer, backed by the @skylighting@ package (the same tokenizer/syntax
+--- library Pandoc uses). Off by default: every existing golden fixture is
+--- plain text with no ANSI escapes in it, and this module is the only place
+--- that can introduce syntax-highlighting escapes into a snippet, so turning
+--- it on is always an explicit opt-in via
+--- 'Tadka.Internal.Config.withHighlightMode'.
++-- | The renderer's side of syntax highlighting: it applies a
++-- 'Tadka.Internal.Config.Highlighter' to a source's lines and checks what
++-- comes back. There is no tokenizer here and no dependency on one; the
++-- @tadka-highlight@ package provides a skylighting-backed 'Highlighter'.
+ --
+--- Highlighting is always best-effort: an unrecognised source name, a
+--- tokenizer failure, or any other way this module can't produce a coloured
+--- line falls back to the plain text the caller already had, never to an
+--- error or a dropped line.
++-- Safety rule: a highlighted line is only used if stripping its SGR colour
++-- escapes (@ESC [ params m@) yields exactly the plain line the renderer
++-- would have printed anyway. A highlighter therefore cannot alter text,
++-- shift caret columns, or smuggle any other terminal escape sequence into the
++-- report; a line that fails the check falls back to plain text.
+ --
+ -- No compatibility guarantee.
+ module Tadka.Internal.Highlight
+-  ( resolveSyntax
+-  , tokenizeNamedSource
++  ( applyHighlighter
+   , highlightLine
++  , stripSgr
+   ) where
+ 
++import           Data.Char                 (isDigit)
+ import           Data.Text                 (Text)
+ import qualified Data.Text                 as T
+-import           Skylighting                (SourceLine, Syntax, TokenizerConfig (..),
+-                                             defaultFormatOpts, defaultSyntaxMap, formatANSI,
+-                                             lookupSyntax, pygments, syntaxesByFilename,
+-                                             tokenize)
+ 
+-import           Tadka.Internal.Config      (HighlightMode (..))
+-import           Tadka.Internal.SourceCode  (SourceCode (..))
+-import           Tadka.Internal.Width       (expandTabs)
++import           Tadka.Internal.Config     (Highlighter (..))
+ 
+--- | Decide which 'Syntax' (if any) to highlight a source with, given the
+--- configured mode and the source's own name (usually a file path).
+--- 'HighlightOff' and an unresolvable 'HighlightAuto'\/'HighlightLanguage'
+--- both yield 'Nothing' — "no syntax found" is not an error here, it is
+--- exactly the same as asking for no highlighting.
+-resolveSyntax :: HighlightMode -> Text -> Maybe Syntax
+-resolveSyntax HighlightOff           _    = Nothing
+-resolveSyntax (HighlightLanguage lg) _    = lookupSyntax lg defaultSyntaxMap
+-resolveSyntax HighlightAuto          name =
+-  case syntaxesByFilename defaultSyntaxMap (T.unpack name) of
+-    (s : _) -> Just s
+-    []      -> Nothing
++-- | Run a highlighter over a whole source (so multi-line constructs keep
++-- their context). 'Nothing' if the highlighter declines or returns a number
++-- of lines different from the number it was given.
++applyHighlighter :: Highlighter -> Text -> [Text] -> Maybe [Text]
++applyHighlighter h name plain = case runHighlighter h name plain of
++  Just out | length out == length plain -> Just out
++  _                                     -> Nothing
+ 
+--- | Tokenize an entire source once, against the same tab-expanded,
+--- CR-stripped line text the graphical renderer itself goes on to display
+--- (via 'SourceCode' and 'expandTabs') — never the raw, un-expanded source —
+--- so a token's text lines up exactly with what 'highlightLine' is later
+--- asked to colourise. Tokenizing the whole source, rather than just the
+--- displayed window, is what lets a multi-line construct (a block comment, a
+--- triple-quoted string) carry its syntax context correctly onto a
+--- continuation line that happens to be the one actually shown; tokenizing
+--- one displayed line at a time would restart the syntax at its starting
+--- context on every line and could misclassify such a line.
+---
+--- 'Nothing' on any tokenizer failure (pathological input, an incomplete
+--- syntax definition, …): highlighting is always best-effort, and
+--- 'highlightLine' already treats 'Nothing' the same as "don't highlight".
+-tokenizeNamedSource :: SourceCode a => Int -> Syntax -> a -> Maybe [SourceLine]
+-tokenizeNamedSource tabW syntax src =
+-  either (const Nothing) Just (tokenize cfg syntax expanded)
+-  where
+-    cfg = TokenizerConfig { syntaxMap = defaultSyntaxMap, traceOutput = False }
+-    expanded =
+-      T.intercalate (T.singleton '\n')
+-        (map (expandTabs tabW . snd) (scLines src (1, scLineCount src)))
++-- | The highlighted form of the 1-based line @n@, or @plain@ if there is no
++-- highlighted text for it or it is not exactly @plain@ plus SGR escapes.
++highlightLine :: Maybe [Text] -> Int -> Text -> Text
++highlightLine Nothing    _ plain = plain
++highlightLine (Just lns) n plain
++  | n < 1     = plain
++  | otherwise = case drop (n - 1) lns of
++      (hl : _) | stripSgr hl == plain -> hl
++      _                               -> plain
++
++-- | Remove every complete SGR escape (@ESC [ digits-and-semicolons m@).
++-- Anything else, including a lone or malformed ESC, is left in place, so
++-- the comparison in 'highlightLine' fails on it.
++stripSgr :: Text -> Text
++stripSgr t = case T.break (== '\ESC') t of
++  (before, rest)
++    | T.null rest -> before
++    | otherwise   -> case sgrLength rest of
++        Just n  -> before <> stripSgr (T.drop n rest)
++        Nothing -> before <> T.take 1 rest <> stripSgr (T.drop 1 rest)
+ 
+--- | ANSI-highlight the given 1-based line, given the whole source's
+--- tokenization (or 'Nothing' if highlighting isn't in play for this group)
+--- and the already tab-expanded plain text the graphical renderer would
+--- otherwise print verbatim. Falls back to that plain text whenever
+--- highlighting isn't possible or would be a no-op: no tokenization, the
+--- line number out of range, or an empty line. Caret columns are computed
+--- separately, from this very same plain text, before this function is ever
+--- called, and never inspect the ANSI escapes this inserts — @skylighting@'s
+--- own formatter wraps the text in zero-width SGR codes, it never changes
+--- the text itself — so caret alignment is identical either way.
+-highlightLine :: Maybe [SourceLine] -> Int -> Text -> Text
+-highlightLine Nothing  _ plain = plain
+-highlightLine (Just _) _ plain | T.null plain = plain
+-highlightLine (Just lns) n plain = case drop (n - 1) lns of
+-  (ln : _) ->
+-    let out = formatANSI defaultFormatOpts pygments [ln]
+-    in if T.null out then plain else out
+-  [] -> plain
++-- | Length of the SGR escape at the start of the text, if there is one.
++sgrLength :: Text -> Maybe Int
++sgrLength t = do
++  rest1 <- T.stripPrefix "\ESC[" t
++  let (params, rest2) = T.span (\c -> isDigit c || c == ';') rest1
++  _ <- T.stripPrefix "m" rest2
++  pure (2 + T.length params + 1)
+diff --git a/src/Tadka/Internal/Render.hs b/src/Tadka/Internal/Render.hs
+index 64b221a..7379aca 100644
+--- a/src/Tadka/Internal/Render.hs
++++ b/src/Tadka/Internal/Render.hs
+@@ -21,6 +21,7 @@ import qualified Data.Aeson                     as Aeson
+ import qualified Data.ByteString.Lazy           as BSL
+ import           Data.Maybe                     (fromMaybe)
+ import           Data.Text                      (Text)
++import qualified Data.Text                      as T
+ import qualified Data.Text.IO                   as TIO
+ import           Data.Text.Encoding             (decodeUtf8)
+ import           System.IO                       (Handle, stdout)
+@@ -30,11 +31,11 @@ import           Prettyprinter.Render.Text      (renderStrict)
+ import           Tadka.Internal.Ann             (Ann)
+ import           Tadka.Internal.Config
+                    (Config, Target (..), configCauseDetail, configColorMode,
+-                    configHighlightMode, configPalette, configContextLines,
++                    configHighlighter, configPalette, configContextLines,
+                     configHyperlinkMode, configRelatedDepth, configTabWidth,
+                     configTarget, configUnicodeMode)
+ import           Tadka.Internal.Diagnostic      (Diagnostic)
+-import           Tadka.Internal.Terminal        (detectTerminalCaps, resolveConfig)
++import           Tadka.Internal.Terminal        (detectTerminalCaps, handleIsUnicode, resolveConfig)
+ import           Tadka.Internal.Renderer.Graphical
+                    (GraphicalOptions (..), renderGraphical)
+ import           Tadka.Internal.Renderer.Json
+@@ -74,7 +75,7 @@ selectRenderer cfg =
+           , goTabWidth      = configTabWidth cfg
+           , goContextLines  = configContextLines cfg
+           , goCauseDetail   = configCauseDetail cfg
+-          , goHighlightMode = configHighlightMode cfg
++          , goHighlighter   = configHighlighter cfg
+           }
+     TNarratable ->
+       SomeRenderer (Narratable (NarratableOptions (configRelatedDepth cfg) (configCauseDetail cfg)))
+@@ -109,7 +110,18 @@ renderDiagnosticTo h cfg e = do
+ -- look like a terminal", never "does stdout, regardless of where this is
+ -- headed".
+ reportDiagnosticTo :: Diagnostic e => Handle -> Config -> e -> IO ()
+-reportDiagnosticTo h cfg e = renderDiagnosticTo h cfg e >>= TIO.hPutStrLn h
++reportDiagnosticTo h cfg e = do
++  txt <- renderDiagnosticTo h cfg e
++  uni <- handleIsUnicode h
++  TIO.hPutStrLn h (if uni then txt else asciiOnly txt)
++  where
++    -- A handle that cannot encode Unicode (a C\/POSIX locale, a Latin-1
++    -- terminal, a binary handle) raises an exception on the first character
++    -- it cannot encode, possibly after part of the report was already
++    -- written. Non-ASCII characters (source text, messages) become @?@
++    -- instead; the box-drawing glyphs were already replaced by ASCII ones,
++    -- since 'detectTerminalCaps' reports such a handle as non-Unicode.
++    asciiOnly = T.map (\c -> if c < '\x80' then c else '?')
+ 
+ -- | Report a diagnostic to 'stdout'. A thin specialisation of
+ -- 'reportDiagnosticTo' kept for backward compatibility and as the
+diff --git a/src/Tadka/Internal/Renderer/Graphical.hs b/src/Tadka/Internal/Renderer/Graphical.hs
+index 4cb7979..00cf15d 100644
+--- a/src/Tadka/Internal/Renderer/Graphical.hs
++++ b/src/Tadka/Internal/Renderer/Graphical.hs
+@@ -41,13 +41,12 @@ import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated,
+ 
+ import           Tadka.Internal.Ann            (Ann (..))
+ import           Tadka.Internal.Config         (CauseDetail (..), ColorMode (..),
+-                                                HighlightMode (..), HyperlinkMode (..),
++                                                Highlighter, HyperlinkMode (..),
+                                                 UnicodeMode (..))
+ import           Tadka.Internal.Context        (Context, LabelKind (..),
+                                                 LabelState (..), Labeled (..),
+                                                 SourceGroup (..), contextSourceGroups)
+-import           Tadka.Internal.Highlight      (highlightLine, resolveSyntax,
+-                                                tokenizeNamedSource)
++import           Tadka.Internal.Highlight      (applyHighlighter, highlightLine)
+ import           Tadka.Internal.SourceCode     (SourceCode (..))
+ import           Tadka.Internal.Renderer.LinePlan (PlanEntry (..), planLines)
+ import           Tadka.Internal.Renderer.Layout   (CellKind (..), assignLanes,
+@@ -74,7 +73,7 @@ data GraphicalOptions = GraphicalOptions
+   , goTabWidth      :: Int
+   , goContextLines  :: Maybe Int
+   , goCauseDetail   :: CauseDetail
+-  , goHighlightMode :: HighlightMode
++  , goHighlighter   :: Maybe Highlighter
+   }
+   deriving (Eq, Show)
+ 
+@@ -214,54 +213,64 @@ renderRoot opts sd@(SomeDiagnostic e) =
+   where
+     glyphs   = glyphsFor (goUnicodeMode opts)
+     cmode    = goColorMode opts
++    fuel     = goRelatedDepth opts
+     gw       = gutterWidth (context e)
+     eqIndent = T.replicate (gw + 1) " "
+     header   = headerLine cmode (severity e) (code e) (docToStyledText cmode (message e))
+-    snip     = snippetLines glyphs (severity e) cmode (goHighlightMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
++    snip     = snippetLines glyphs (severity e) cmode (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
+     trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
+                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
+-                 ++ causeLinesFor opts cmode glyphs eqIndent sd
+-                 ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
++                 ++ causeLinesFor opts fuel cmode glyphs eqIndent sd
++                 ++ relatedForest opts fuel glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
+     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
+ 
+ -- | The "= caused by: ..." lines for a diagnostic's own 'diagnosticCause'
+ -- chain, indented to the given column. Shared by 'renderRoot' and every
+ -- 'relatedChild' so a diagnostic's causes render identically regardless of
+--- where in the report it appears: a related diagnostic's cause chain is not
+--- a second-class citizen relative to the root's.
++-- where in the report it appears.
+ --
+ -- Under 'CauseSummary' (the default) each cause is one line: its code and
+--- message, nothing else. Under 'CauseFull' each cause gets a fully nested
+--- report — its own snippet, help\/see lines, and related forest, exactly
+--- the way a 'related' diagnostic already renders — chained one nesting
+--- level deeper per cause, so a cause-of-a-cause reads as nested under its
+--- own cause rather than all flattened to one indent.
+-causeLinesFor :: GraphicalOptions -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
+-causeLinesFor opts cmode glyphs indent sd = case goCauseDetail opts of
+-  CauseSummary -> [ indent <> "= caused by: " <> summaryOf cmode glyphs c | c <- chain ]
+-  CauseFull    -> causeChain indent chain
++-- message. Under 'CauseFull' each cause also gets its own snippet, help\/see
++-- lines and related forest, nested one level deeper per cause.
++--
++-- The @fuel@ argument is what makes 'CauseFull' terminate. Rendering a cause
++-- in full can reach more related diagnostics, whose own causes are rendered
++-- in full in turn, and a cyclic structure never repeats a 'diagnosticId'
++-- within any single bounded walk. Every step into a cause's full rendering
++-- therefore spends one unit of fuel, and at zero fuel a cause is rendered as
++-- its summary line only. Fuel starts at the related-depth limit.
++causeLinesFor :: GraphicalOptions -> Natural -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
++causeLinesFor opts fuel cmode glyphs indent sd = case goCauseDetail opts of
++  CauseFull -> causeChain fuel indent chain
++  CauseSummary -> summaries indent chain
+   where
+     chain = walkCauses (goRelatedDepth opts) sd
+ 
+     nest :: Text
+     nest = "  "
+ 
+-    causeChain :: Text -> [SomeDiagnostic] -> [Text]
+-    causeChain _   []                      = []
+-    causeChain ind (c@(SomeDiagnostic ce) : cs) =
+-         (ind <> "= caused by: " <> summaryOf cmode glyphs c)
+-       : map (nest <>) (ownSnippet ++ ownHelpSee ++ ownSep ++ ownRelated ++ rest)
++    summaries :: Text -> [SomeDiagnostic] -> [Text]
++    summaries ind cs = [ ind <> "= caused by: " <> summaryOf cmode glyphs c | c <- cs ]
++
++    causeChain :: Natural -> Text -> [SomeDiagnostic] -> [Text]
++    causeChain _ _ [] = []
++    causeChain f ind cs@(c@(SomeDiagnostic ce) : rest)
++      | f == 0    = summaries ind cs
++      | otherwise =
++          (ind <> "= caused by: " <> summaryOf cmode glyphs c)
++            : map (nest <>) (ownSnippet ++ ownHelpSee ++ ownSep ++ ownRelated ++ ownRest)
+       where
+         ownGw      = gutterWidth (context ce)
+         ownIndent  = T.replicate (ownGw + 1) " "
+-        ownSnippet = snippetLines glyphs (severity ce) cmode (goHighlightMode opts) (goPalette opts)
++        ownSnippet = snippetLines glyphs (severity ce) cmode (goHighlighter opts) (goPalette opts)
+                        (goTabWidth opts) (goContextLines opts) ownGw (context ce)
+         ownHelpSee = helpSeeLines ownGw (fmap (docToStyledText cmode) (help ce))
+                        (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url ce))
+-        ownRelated = relatedForest opts glyphs ownGw ownIndent (walkRelated (goRelatedDepth opts) c)
+-        rest       = causeChain ownIndent cs
++        ownRelated = relatedForest opts (f - 1) glyphs ownGw ownIndent
++                       (walkRelated (goRelatedDepth opts) c)
++        ownRest    = causeChain (f - 1) ownIndent rest
+         ownSep     = [ ownIndent <> gRail glyphs
+-                     | not (null ownSnippet) && not (null (ownHelpSee ++ ownRelated ++ rest)) ]
++                     | not (null ownSnippet) && not (null (ownHelpSee ++ ownRelated ++ ownRest)) ]
+ 
+ -- === Header ===============================================================
+ 
+@@ -294,30 +303,30 @@ gutterWidth ctx = length (show (foldr max 1 (concatMap okEndLines (contextSource
+ -- strict generalisation, not a different rendering for the case that already
+ -- worked.
+ snippetLines
+-  :: Glyphs -> Severity -> ColorMode -> HighlightMode -> NonEmpty AnsiStyle -> Int -> Maybe Int
++  :: Glyphs -> Severity -> ColorMode -> Maybe Highlighter -> NonEmpty AnsiStyle -> Int -> Maybe Int
+   -> Int -> Context -> [Text]
+-snippetLines glyphs sev cmode hlMode palette tabW ctxLines gw ctx =
+-  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode hlMode palette tabW ctxLines gw)
++snippetLines glyphs sev cmode hl palette tabW ctxLines gw ctx =
++  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode hl palette tabW ctxLines gw)
+                               (contextSourceGroups ctx))
+   where
+     groupSep = T.replicate (gw + 1) " " <> gRail glyphs
+ 
+ groupSnippetLines
+-  :: Glyphs -> Severity -> ColorMode -> HighlightMode -> NonEmpty AnsiStyle -> Int -> Maybe Int
++  :: Glyphs -> Severity -> ColorMode -> Maybe Highlighter -> NonEmpty AnsiStyle -> Int -> Maybe Int
+   -> Int -> SourceGroup -> [Text]
+-groupSnippetLines glyphs sev cmode hlMode palette tabW ctxLines gw (SourceGroup src labels) =
++groupSnippetLines glyphs sev cmode hl palette tabW ctxLines gw (SourceGroup src labels) =
+   [locationLine, railBlank] ++ body
+   where
+-    -- Highlighting is only ever meaningful under colour: skip the
+-    -- tokenizer entirely under 'ColorNever' rather than resolving a syntax
+-    -- and formatting ANSI escapes nobody will see (and every plain-text
+-    -- golden fixture must stay byte-for-byte unchanged regardless of this
+-    -- option).
+-    effHlMode = case cmode of
+-      ColorNever -> HighlightOff
+-      _          -> hlMode
+-    mSyntax   = resolveSyntax effHlMode (scName src)
+-    mTokens   = mSyntax >>= \syn -> tokenizeNamedSource tabW syn src
++    -- Highlighting is only meaningful under colour; under 'ColorNever' the
++    -- highlighter is not run at all, so plain-text output is unchanged. The
++    -- highlighter sees exactly the text this renderer would print (control
++    -- characters replaced, tabs expanded), and 'highlightLine' only accepts
++    -- its answer for a line if it is that same text plus SGR colour codes.
++    effHl = case cmode of
++      ColorNever -> Nothing
++      _          -> hl
++    plainLines = [ expandTabs tabW (sanitizeLine t) | (_, t) <- scLines src (1, scLineCount src) ]
++    mHighlighted = effHl >>= \h -> applyHighlighter h (scName src) plainLines
+     indexed = zip [0 ..] (NE.toList labels)
+     -- Per-kind rank (0-based, "how many earlier labels share this one's
+     -- kind"), computed once over the OK labels in original document order and
+@@ -386,7 +395,7 @@ groupSnippetLines glyphs sev cmode hlMode palette tabW ctxLines gw (SourceGroup
+     lineWithCarets win l = numbered : caretsHere
+       where
+         srcLine   = sanitizeLine (lineLookup win l)
+-        displayed = highlightLine mTokens l (expandTabs tabW srcLine)
++        displayed = highlightLine mHighlighted l (expandTabs tabW srcLine)
+         numbered  = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " "
+                      <> srcGutter l <> displayed <> mlSuffix l
+         caretsHere =
+@@ -420,9 +429,9 @@ helpSeeLines gw mhelp murl =
+ -- === Related nesting ======================================================
+ 
+ -- Render the related section under a parent, given the parent's eq-line indent.
+-relatedForest :: GraphicalOptions -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
+-relatedForest opts glyphs _gw indent (RelatedTree parentDiag children term) =
+-     concatMap (relatedChild opts glyphs indent) children
++relatedForest :: GraphicalOptions -> Natural -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
++relatedForest opts fuel glyphs _gw indent (RelatedTree parentDiag children term) =
++     concatMap (relatedChild opts fuel glyphs indent) children
+   ++ depthNote
+   where
+     depthNote = case term of
+@@ -431,8 +440,8 @@ relatedForest opts glyphs _gw indent (RelatedTree parentDiag children term) =
+                 <> " more related diagnostics omitted)"]
+       _ -> []
+ 
+-relatedChild :: GraphicalOptions -> Glyphs -> Text -> RelatedTree -> [Text]
+-relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
++relatedChild :: GraphicalOptions -> Natural -> Glyphs -> Text -> RelatedTree -> [Text]
++relatedChild opts fuel glyphs indent node@(RelatedTree childDiag _ term) =
+   case term of
+     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
+     _ ->
+@@ -443,11 +452,11 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
+     childGw     = withDiag childDiag (gutterWidth . context)
+     childIndent = T.replicate (childGw + 1) " "
+     childSnippet = withDiag childDiag
+-      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goHighlightMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
++      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
+     -- Same call, same shape, as 'renderRoot': a related diagnostic's own
+     -- "caused by" chain renders exactly as the root's would, just nested.
+-    childCauses  = causeLinesFor opts (goColorMode opts) glyphs childIndent childDiag
+-    childRelated = relatedForest opts glyphs childGw childIndent node
++    childCauses  = causeLinesFor opts fuel (goColorMode opts) glyphs childIndent childDiag
++    childRelated = relatedForest opts fuel glyphs childGw childIndent node
+     childSep     = [childIndent <> gRail glyphs
+                    | not (null childSnippet) && not (null (childCauses ++ childRelated))]
+ 
+diff --git a/src/Tadka/Internal/Renderer/Json.hs b/src/Tadka/Internal/Renderer/Json.hs
+index 21c062a..0af1ecd 100644
+--- a/src/Tadka/Internal/Renderer/Json.hs
++++ b/src/Tadka/Internal/Renderer/Json.hs
+@@ -186,15 +186,21 @@ currentSchemaVersion = 1
+ -- every related diagnostic, so a node's causes never depend on whether it
+ -- happens to be the one the caller started from.
+ toDTO :: CauseDetail -> Natural -> RelatedTree -> DiagnosticDTO
+-toDTO cd depth (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
++toDTO cd depth = toDTOFuel cd depth depth
++
++-- | 'toDTO' with an explicit @fuel@ bounding how many times full cause detail
++-- may nest (each full cause spends one unit; see 'causeDTO'). It starts at the
++-- related-depth limit, so a structurally cyclic diagnostic still terminates.
++toDTOFuel :: CauseDetail -> Natural -> Natural -> RelatedTree -> DiagnosticDTO
++toDTOFuel cd depth fuel (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
+   { dtoCode         = unDiagnosticCode <$> code e
+   , dtoSeverity     = severityJsonTag (severity e)
+   , dtoMessage      = docToText (message e)
+   , dtoLabels       = labelsDTO (context e)
+   , dtoHelp         = docToText <$> help e
+   , dtoUrl          = unUrl <$> url e
+-  , dtoRelated      = [ toDTO cd depth c | c <- children, not (isCycle c) ]
+-  , dtoCauses       = map (causeDTO cd depth) (walkCauses depth sd)
++  , dtoRelated      = [ toDTOFuel cd depth fuel c | c <- children, not (isCycle c) ]
++  , dtoCauses       = map (causeDTO cd depth fuel) (walkCauses depth sd)
+   , dtoTruncated    = term == DepthTruncated
+   , dtoCycleOmitted = any isCycle children
+   }
+@@ -235,11 +241,18 @@ renderJson opts e = case toJSON (toDTO cd depth (walkRelated depth root)) of
+     depth = joRelatedDepth opts
+     cd    = joCauseDetail opts
+ 
+-causeDTO :: CauseDetail -> Natural -> SomeDiagnostic -> CauseDTO
+-causeDTO CauseSummary _     (SomeDiagnostic e) =
++-- | One entry of a diagnostic's cause chain. The chain is listed flat, in
++-- order, on the diagnostic that owns it, so under 'CauseFull' an entry's own
++-- @causes@ is always empty: its successors are the entries after it in the
++-- owner's list, and nesting them again would repeat every later cause once per
++-- earlier one. A full entry still carries its own labels, help and related
++-- diagnostics. At zero @fuel@ an entry degrades to the summary shape.
++causeDTO :: CauseDetail -> Natural -> Natural -> SomeDiagnostic -> CauseDTO
++causeDTO CauseFull depth fuel c
++  | fuel > 0 =
++      CauseDTOFull ((toDTOFuel CauseFull depth (fuel - 1) (walkRelated depth c)) { dtoCauses = [] })
++causeDTO _ _ _ (SomeDiagnostic e) =
+   CauseDTOSummary (unDiagnosticCode <$> code e) (docToText (message e))
+-causeDTO CauseFull    depth c                   =
+-  CauseDTOFull (toDTO CauseFull depth (walkRelated depth c))
+ 
+ -- Plain-text rendering of an annotated document (annotations discarded); JSON
+ -- string values carry the raw message\/label\/help text.
+diff --git a/src/Tadka/Internal/Renderer/Narratable.hs b/src/Tadka/Internal/Renderer/Narratable.hs
+index aa4d892..25c76ee 100644
+--- a/src/Tadka/Internal/Renderer/Narratable.hs
++++ b/src/Tadka/Internal/Renderer/Narratable.hs
+@@ -75,8 +75,10 @@ renderProse opts sd@(SomeDiagnostic e) =
+      headerSentence (severity e) (fmap unDiagnosticCode (code e)) (docToProse (message e))
+    : contextSentences (context e)
+   ++ helpSentences (fmap docToProse (help e)) (fmap unUrl (url e))
+-  ++ causeSentences opts (walkCauses (noRelatedDepth opts) sd)
+-  ++ relatedSentences opts (walkRelated (noRelatedDepth opts) sd)
++  ++ causeSentences opts fuel (walkCauses (noRelatedDepth opts) sd)
++  ++ relatedSentences opts fuel (walkRelated (noRelatedDepth opts) sd)
++  where
++    fuel = noRelatedDepth opts
+ 
+ -- === Header ===============================================================
+ 
+@@ -146,20 +148,20 @@ helpSentences mhelp murl =
+ 
+ -- === Related ==============================================================
+ 
+-relatedSentences :: NarratableOptions -> RelatedTree -> [Text]
+-relatedSentences opts (RelatedTree rootDiag children term) =
+-     concatMap (relatedChild opts) children
++relatedSentences :: NarratableOptions -> Natural -> RelatedTree -> [Text]
++relatedSentences opts fuel (RelatedTree rootDiag children term) =
++     concatMap (relatedChild opts fuel) children
+   ++ truncationNote term (numRelated rootDiag)
+ 
+-relatedChild :: NarratableOptions -> RelatedTree -> [Text]
+-relatedChild opts (RelatedTree childDiag kids term) = case term of
++relatedChild :: NarratableOptions -> Natural -> RelatedTree -> [Text]
++relatedChild opts fuel (RelatedTree childDiag kids term) = case term of
+   CycleOmitted -> [ "A related diagnostic was omitted because it forms a cycle." ]
+   _ ->
+        ("Related: " <> summaryProse childDiag <> ".")
+        -- Same call, same shape, as 'renderProse': a related diagnostic's own
+        -- cause chain reads exactly as the root's would, just nested here.
+-     : causeSentences opts (walkCauses (noRelatedDepth opts) childDiag)
+-    ++ concatMap (relatedChild opts) kids
++     : causeSentences opts fuel (walkCauses (noRelatedDepth opts) childDiag)
++    ++ concatMap (relatedChild opts fuel) kids
+     ++ truncationNote term (numRelated childDiag)
+ 
+ truncationNote :: TerminationReason -> Int -> [Text]
+@@ -175,19 +177,25 @@ plural _ = "s were"
+ -- default) each cause is one sentence: its code and message. Under
+ -- 'CauseFull' each cause also gets its own location\/source-line\/label
+ -- sentences, help\/more-information sentences, and related-diagnostic
+--- sentences — exactly what 'renderProse' would say about it standalone —
+--- read right after its own "Caused by" sentence, before the next cause in
+--- the chain.
+-causeSentences :: NarratableOptions -> [SomeDiagnostic] -> [Text]
+-causeSentences opts cs = case noCauseDetail opts of
+-  CauseSummary -> map (\c -> "Caused by: " <> summaryProse c <> ".") cs
+-  CauseFull    -> concatMap fullCause cs
++-- sentences — what 'renderProse' would say about it standalone — read right
++-- after its own "Caused by" sentence, before the next cause in the chain.
++--
++-- @fuel@ bounds how deeply full cause detail may nest through related
++-- diagnostics and their own causes (see the graphical renderer's
++-- @causeLinesFor@ for the reasoning). Each full cause spends one unit; at
++-- zero fuel a cause is a single summary sentence.
++causeSentences :: NarratableOptions -> Natural -> [SomeDiagnostic] -> [Text]
++causeSentences opts fuel cs = case noCauseDetail opts of
++  CauseFull | fuel > 0 -> concatMap fullCause cs
++  _                    -> map summary cs
+   where
++    summary c = "Caused by: " <> summaryProse c <> "."
++
+     fullCause c@(SomeDiagnostic ce) =
+-         ("Caused by: " <> summaryProse c <> ".")
++         summary c
+        : contextSentences (context ce)
+       ++ helpSentences (fmap docToProse (help ce)) (fmap unUrl (url ce))
+-      ++ relatedSentences opts (walkRelated (noRelatedDepth opts) c)
++      ++ relatedSentences opts (fuel - 1) (walkRelated (noRelatedDepth opts) c)
+ 
+ summaryProse :: SomeDiagnostic -> Text
+ summaryProse (SomeDiagnostic e) = case code e of
+diff --git a/src/Tadka/Internal/TH.hs b/src/Tadka/Internal/TH.hs
+index daf2f23..25b06d6 100644
+--- a/src/Tadka/Internal/TH.hs
++++ b/src/Tadka/Internal/TH.hs
+@@ -37,7 +37,7 @@ module Tadka.Internal.TH
+   ) where
+ 
+ import           Control.Monad              (forM)
+-import           Data.List                  ( intercalate, nub, (\\))
++import           Data.List                  (intercalate, nub, (\\))
+ import           Data.Maybe                 (catMaybes)
+ import           Data.Text                  (Text, pack, unpack)
+ import           Language.Haskell.TH
+@@ -142,7 +142,7 @@ newtype SpecEntry = SpecEntry (DiagnosticSpec -> DiagnosticSpec)
+ -- entry, so @['diagLabel' \'a "x", 'diagLabel' \'b "y"]@ means the same as
+ -- @'specLabelFields' = [(\'a, "x"), (\'b, "y")]@, not the last one winning.
+ diagnosticSpec :: [SpecEntry] -> DiagnosticSpec
+-diagnosticSpec = foldl' (\s (SpecEntry f) -> f s) defaultSpec
++diagnosticSpec = foldl (\s (SpecEntry f) -> f s) defaultSpec
+ 
+ diagCode :: Text -> SpecEntry
+ diagCode t = SpecEntry (\s -> s { specCode = Just t })
+diff --git a/src/Tadka/Internal/Terminal.hs b/src/Tadka/Internal/Terminal.hs
+index 991d8a0..9f11154 100644
+--- a/src/Tadka/Internal/Terminal.hs
++++ b/src/Tadka/Internal/Terminal.hs
+@@ -9,6 +9,7 @@
+ module Tadka.Internal.Terminal
+   ( TerminalCaps (..)
+   , detectTerminalCaps
++  , handleIsUnicode
+   , resolveColor
+   , resolveUnicode
+   , resolveHyperlink
+@@ -18,7 +19,8 @@ module Tadka.Internal.Terminal
+ import           Data.Maybe          (isJust, listToMaybe)
+ import qualified Data.Text           as T
+ import           System.Environment  (lookupEnv)
+-import           System.IO           (Handle, hIsTerminalDevice)
++import           Data.Char           (toUpper)
++import           System.IO           (Handle, hGetEncoding, hIsTerminalDevice)
+ 
+ import           Tadka.Internal.Config (ColorMode (..), Config, HyperlinkMode (..),
+                                         UnicodeMode (..), configColorMode,
+@@ -31,7 +33,7 @@ data TerminalCaps = TerminalCaps
+   { capIsTerminal      :: Bool   -- ^ the handle is an interactive terminal
+   , capNoColor         :: Bool   -- ^ @NO_COLOR@ is present (any value)
+   , capForceColor      :: Bool   -- ^ @CLICOLOR_FORCE@ is present and not @"0"@
+-  , capUnicode         :: Bool   -- ^ the active locale looks UTF-8
++  , capUnicode         :: Bool   -- ^ the locale looks UTF-8 and the handle's own encoding is a Unicode one
+   , capNoHyperlink     :: Bool   -- ^ @NO_HYPERLINK@ is present (any value)
+   , capForceHyperlink  :: Bool   -- ^ @FORCE_HYPERLINK@ is present and not @"0"@
+   }
+@@ -52,13 +54,28 @@ detectTerminalCaps h = do
+   term        <- hIsTerminalDevice h
+   noColor     <- isJust <$> lookupEnv "NO_COLOR"
+   force       <- maybe False (/= "0") <$> lookupEnv "CLICOLOR_FORCE"
+-  uni         <- localeIsUtf8
++  localeUtf8  <- localeIsUtf8
++  handleUtf8  <- handleIsUnicode h
++  let uni = localeUtf8 && handleUtf8
+   noHyper     <- isJust <$> lookupEnv "NO_HYPERLINK"
+   forceHyper  <- maybe False (/= "0") <$> lookupEnv "FORCE_HYPERLINK"
+   pure TerminalCaps { capIsTerminal = term, capNoColor = noColor
+                     , capForceColor = force, capUnicode = uni
+                     , capNoHyperlink = noHyper, capForceHyperlink = forceHyper }
+ 
++-- | Whether the handle's own text encoding is a Unicode one (UTF-8, UTF-16,
++-- UTF-32). The locale environment variables say what the terminal probably
++-- supports, but the encoding actually installed on the 'Handle' decides
++-- whether writing a non-ASCII character succeeds, and the two can differ
++-- (a C locale, an @hSetEncoding@ call, a binary-mode handle, which has no
++-- text encoding at all and is treated as not Unicode).
++handleIsUnicode :: Handle -> IO Bool
++handleIsUnicode h = do
++  menc <- hGetEncoding h
++  pure $ case menc of
++    Nothing  -> False
++    Just enc -> take 3 (map toUpper (show enc)) == "UTF"
++
+ localeIsUtf8 :: IO Bool
+ localeIsUtf8 = do
+   vals <- traverse lookupEnv ["LC_ALL", "LC_CTYPE", "LANG"]
+diff --git a/src/Tadka/Internal/Width.hs b/src/Tadka/Internal/Width.hs
+index d322880..f2157c3 100644
+--- a/src/Tadka/Internal/Width.hs
++++ b/src/Tadka/Internal/Width.hs
+@@ -21,7 +21,7 @@ module Tadka.Internal.Width
+ 
+ import           Data.Array            (Array, bounds, inRange, listArray, (!))
+ import           Data.Char             (ord)
+-import           Data.List             ( sortOn)
++import           Data.List             (sortOn)
+ import qualified Data.Text.Lazy         as TL
+ import qualified Data.Text.Lazy.Builder as TB
+ import           Data.Maybe            (fromMaybe)
+@@ -58,17 +58,23 @@ charWidth c =
+        then 0
+        else if inRanges wideArr x then 2 else 1
+ 
+--- | Display width of a 'Text' as the sum of its /grapheme clusters/' widths
+--- (see 'graphemeClusters'\/'clusterWidth'), not of its individual code
+--- points. For text with no combining marks, ZWJ sequences, or decomposed
+--- Hangul jamo — every plain-ASCII line, and the overwhelming majority of
+--- real source text — every cluster is exactly one code point, so this is
+--- unchanged from summing 'charWidth' directly. It only differs where the
+--- naive per-code-point sum was actually wrong: a decomposed Hangul syllable
+--- or an @Extended_Pictographic@ ZWJ run is counted once, at its rendered
+--- width, instead of once per constituent code point.
++-- | Display width of a 'Text': the sum of its grapheme clusters' widths (see
++-- 'graphemeClusters' and 'clusterWidth'). Text in which no cluster can span
++-- more than one code point (see 'isSimple') takes a per-character fast path
++-- that gives the identical answer without segmenting.
+ textWidth :: Text -> Int
+-textWidth = sum . map clusterWidth . graphemeClusters
++textWidth t
++  | isSimple t = T.foldl' (\acc c -> acc + charWidth c) 0 t
++  | otherwise  = sum (map clusterWidth (graphemeClusters t))
++
++-- | True when every code point is below U+0300 and none is a carriage
++-- return. The generated table has no Extend, ZWJ, SpacingMark, Prepend,
++-- Regional_Indicator or Hangul-jamo code point below U+0300, so the only
++-- way two such characters could share a cluster is CR LF; excluding CR
++-- therefore makes every character its own cluster. This is the common case
++-- (ASCII and Latin-1 source lines) and is what the fast paths below test.
++isSimple :: Text -> Bool
++isSimple = T.all (\c -> c < '\x300' && c /= '\r')
+ 
+ -- | The 0-based display column reached after the first @n@ characters of a
+ -- line, expanding tabs to the next multiple of the tab width and counting
+@@ -81,13 +87,23 @@ textWidth = sum . map clusterWidth . graphemeClusters
+ -- side), so clustering a line containing tabs never interferes with this
+ -- function's tab-stop arithmetic.
+ displayColumnAt :: Int -> Text -> Int -> Int
+-displayColumnAt tw line n = go 0 (graphemeClusters (T.take (max 0 n) line))
++displayColumnAt tw line n
++  | isSimple prefix = T.foldl' stepChar 0 prefix
++  | otherwise       = go 0 (graphemeClusters prefix)
+   where
+-    w = max 1 tw
+-    go col []         = col
+-    go col (cl : cls)
++    prefix = T.take (max 0 n) line
++    w      = max 1 tw
++
++    stepChar :: Int -> Char -> Int
++    stepChar col c
++      | c == '\t' = col + (w - (col `mod` w))
++      | otherwise = col + charWidth c
++
++    go :: Int -> [Text] -> Int
++    go !col []         = col
++    go !col (cl : cls)
+       | cl == tabCluster = go (col + (w - (col `mod` w))) cls
+-      | otherwise         = go (col + clusterWidth cl) cls
++      | otherwise        = go (col + clusterWidth cl) cls
+ 
+ tabCluster :: Text
+ tabCluster = T.singleton '\t'
+@@ -98,15 +114,27 @@ tabCluster = T.singleton '\t'
+ -- 'textWidth' equals @'displayColumnAt' tw line (T.length line)@. Total; a
+ -- tab width below 1 is treated as 1.
+ expandTabs :: Int -> Text -> Text
+-expandTabs tw line =
+-  TL.toStrict (TB.toLazyText (snd (foldl' step (0, mempty) (graphemeClusters line))))
++expandTabs tw line
++  | not (T.any (== '\t') line) = line   -- clusters concatenate back to the input
++  | isSimple line = TL.toStrict (TB.toLazyText (snd (T.foldl' stepChar (0, mempty) line)))
++  | otherwise     = TL.toStrict (TB.toLazyText (go 0 mempty (graphemeClusters line)))
+   where
+     w = max 1 tw
+-    step :: (Int, TB.Builder) -> Text -> (Int, TB.Builder)
+-    step (col, acc) cl
++
++    pad :: Int -> TB.Builder
++    pad n = TB.fromText (T.replicate n (T.singleton ' '))
++
++    stepChar :: (Int, TB.Builder) -> Char -> (Int, TB.Builder)
++    stepChar (!col, acc) c
++      | c == '\t' = let n = w - (col `mod` w) in (col + n, acc <> pad n)
++      | otherwise = (col + charWidth c, acc <> TB.singleton c)
++
++    go :: Int -> TB.Builder -> [Text] -> TB.Builder
++    go !_   acc []         = acc
++    go !col acc (cl : cls)
+       | cl == tabCluster =
+-          let n = w - (col `mod` w) in (col + n, acc <> TB.fromText (T.replicate n (T.singleton ' ')))
+-      | otherwise = (col + clusterWidth cl, acc <> TB.fromText cl)
++          let n = w - (col `mod` w) in go (col + n) (acc <> pad n) cls
++      | otherwise = go (col + clusterWidth cl) (acc <> TB.fromText cl) cls
+ 
+ -- | The Grapheme_Cluster_Break property of a code point, or 'GBOther'.
+ graphemeBreakProperty :: Char -> GBProp
+@@ -218,20 +246,38 @@ graphemeClusters t = case T.uncons t of
+       | breakBefore st c = reverse acc : go (startState c) [c] cs
+       | otherwise        = go (advanceState st c) (c : acc) cs
+ 
+--- | Display width of one grapheme cluster (as produced by
+--- 'graphemeClusters'): the width of its leading code point, promoted to 2
+--- if any code point in the cluster 'isExtendedPictographic' — so a
+--- ZWJ-joined emoji sequence counts once, at its rendered width, rather than
+--- once per constituent code point, the same way a decomposed Hangul
+--- syllable's trailing jamo (merged into the same cluster by GB6\/7\/8)
+--- contribute no width of their own beyond the leading jamo's. A
+--- single-character cluster — everything that isn't one of those multi-
+--- code-point cases — is exactly 'charWidth' of that character, so plain
+--- text is completely unaffected by clustering.
++-- | Display width of one grapheme cluster (as produced by 'graphemeClusters').
++--
++-- A single-code-point cluster is exactly 'charWidth' of that character. The
++-- @Extended_Pictographic@ property is deliberately /not/ treated as "wide":
++-- it also covers narrow symbols such as (c), (R), TM, arrows and dingbats,
++-- which terminals draw in one cell. A multi-code-point cluster is two cells
++-- only when it is an emoji presentation sequence (see 'emojiPresentation');
++-- otherwise it takes the width of its leading code point, so a decomposed
++-- Hangul syllable counts once, at its leading jamo's width.
+ clusterWidth :: Text -> Int
+ clusterWidth cluster = case T.uncons cluster of
+-  Nothing      -> 0
+-  Just (c0, _) -> if T.any isExtendedPictographic cluster then 2 else charWidth c0
++  Nothing -> 0
++  Just (c0, rest)
++    | T.null rest               -> charWidth c0
++    | emojiPresentation c0 rest -> 2
++    | otherwise                 -> charWidth c0
++
++-- | Whether a multi-code-point cluster (leading code point and the rest)
++-- renders as a two-cell emoji: a flag (two regional indicators), a base
++-- followed by the emoji variation selector U+FE0F (this includes keycaps),
++-- a base followed by a skin-tone modifier, or a ZWJ sequence of pictographs.
++emojiPresentation :: Char -> Text -> Bool
++emojiPresentation c0 rest =
++     (isRI c0 && T.any isRI rest)
++  || (basePict && T.any (== '\xFE0F') rest)
++  || (basePict && T.any isEmojiModifier rest)
++  || (basePict && T.any (== '\x200D') rest && T.any isExtendedPictographic rest)
++  where
++    basePict = isExtendedPictographic c0 || isKeycapBase c0
++    isRI c   = graphemeBreakProperty c == GBRegionalIndicator
++    isEmojiModifier c = c >= '\x1F3FB' && c <= '\x1F3FF'
++    isKeycapBase c    = c == '#' || c == '*' || (c >= '0' && c <= '9')
+ 
+ -- Range arrays, built once from the generated ascending, coalesced lists.
+ 
+diff --git a/tadka-highlight/src/Tadka/Highlight/Skylighting.hs b/tadka-highlight/src/Tadka/Highlight/Skylighting.hs
+new file mode 100644
+index 0000000..12a6a60
+--- /dev/null
++++ b/tadka-highlight/src/Tadka/Highlight/Skylighting.hs
+@@ -0,0 +1,74 @@
++{-# LANGUAGE OverloadedStrings #-}
++
++-- | Syntax highlighting for Tadka reports, backed by @skylighting@.
++--
++-- > import Tadka
++-- > import Tadka.Highlight.Skylighting
++-- > import Skylighting (pygments)
++-- >
++-- > cfg = withHighlighter (skylightingAuto pygments) defaultConfig
++--
++-- The syntax is chosen from the source's name (its file extension), or forced
++-- with 'skylightingLanguage'. A source with no matching syntax, or one the
++-- tokenizer rejects, is shown as plain text.
++--
++-- The whole source is tokenized once per report, so multi-line constructs
++-- (block comments, strings) keep their context. Tadka only accepts a
++-- highlighted line if it is the plain line plus colour escapes, so nothing
++-- here can change the text or the caret alignment.
++--
++-- /Licence:/ @skylighting@ is GPL-2; see the package description.
++module Tadka.Highlight.Skylighting
++  ( skylightingAuto
++  , skylightingLanguage
++  , skylightingWith
++  ) where
++
++import           Data.Text   (Text)
++import qualified Data.Text   as T
++
++import           Skylighting (Style, Syntax, TokenizerConfig (..), defaultFormatOpts,
++                              defaultSyntaxMap, formatANSI, lookupSyntax,
++                              syntaxesByFilename, tokenize)
++import           Tadka       (Highlighter (..))
++
++-- | Pick the syntax from the source's name, e.g. @src/Main.hs@ selects Haskell.
++skylightingAuto :: Style -> Highlighter
++skylightingAuto style = skylightingWith "skylighting:auto" style byName
++  where
++    byName name = case syntaxesByFilename defaultSyntaxMap (T.unpack name) of
++      (syntax : _) -> Just syntax
++      []           -> Nothing
++
++-- | Always use the named syntax (a name or short name such as @"haskell"@).
++skylightingLanguage :: Style -> Text -> Highlighter
++skylightingLanguage style lang =
++  skylightingWith ("skylighting:" <> lang) style (const (lookupSyntax lang defaultSyntaxMap))
++
++-- | The general form: a name for the highlighter (all that 'Eq' and 'Show'
++-- see of it), a style, and a function from the source's name to a syntax.
++skylightingWith :: Text -> Style -> (Text -> Maybe Syntax) -> Highlighter
++skylightingWith name style pick = Highlighter
++  { highlighterName = name
++  , runHighlighter  = run
++  }
++  where
++    cfg = TokenizerConfig { syntaxMap = defaultSyntaxMap, traceOutput = False }
++
++    run _ []         = Nothing
++    run srcName plain = do
++      syntax <- pick srcName
++      toks   <- either (const Nothing) Just (tokenize cfg syntax (T.intercalate "\n" plain))
++      let missing = length plain - length toks
++      -- The tokenizer splits its input on newlines and drops trailing empty
++      -- lines, so a source ending in blank lines comes back short; pad those
++      -- (they have no tokens). More lines than we sent means something
++      -- unexpected, so give up rather than misalign.
++      if missing < 0
++        then Nothing
++        else Just (zipWith render plain (toks ++ replicate missing []))
++
++    -- An empty line has nothing to colour; leave it exactly empty.
++    render line toks
++      | T.null line = line
++      | otherwise   = formatANSI defaultFormatOpts style [toks]
+diff --git a/tadka-highlight/tadka-highlight.cabal b/tadka-highlight/tadka-highlight.cabal
+new file mode 100644
+index 0000000..8ea2438
+--- /dev/null
++++ b/tadka-highlight/tadka-highlight.cabal
+@@ -0,0 +1,47 @@
++cabal-version:      3.0
++name:               tadka-highlight
++version:            0.1.0.0
++synopsis:           Syntax highlighting for Tadka diagnostics, via skylighting
++description:
++  A 'Tadka.Highlighter' backed by the @skylighting@ package, for colouring
++  source snippets in Tadka's graphical reports.
++  .
++  /Licence note./ @skylighting@ is distributed under the GPL (version 2). This
++  package is therefore GPL-2.0-only as well, and a program that links it is
++  subject to the GPL. The @tadka@ package itself has no dependency on
++  @skylighting@ and is unaffected; only programs that choose to depend on
++  @tadka-highlight@ are.
++category:           Development, Error Handling
++license:            GPL-2.0-only
++author:             Sabrinathan Nair
++maintainer:         259497327+Bombay-Boyz@users.noreply.github.com
++copyright:          (c) 2026 Bombay-Boyz
++homepage:           https://github.com/Bombay-Boyz/tadka
++bug-reports:        https://github.com/Bombay-Boyz/tadka/issues
++build-type:         Simple
++tested-with:        GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
++
++flag werror
++  description: Treat warnings as errors (enable in dev/CI, off for releases).
++  default:     False
++  manual:      True
++
++library
++  default-language: GHC2021
++  ghc-options:      -Wall
++                    -Wcompat
++                    -Wredundant-constraints
++                    -Wincomplete-record-updates
++                    -Wincomplete-uni-patterns
++                    -Wpartial-fields
++  if flag(werror)
++    ghc-options:    -Werror
++  hs-source-dirs:   src
++  exposed-modules:  Tadka.Highlight.Skylighting
++  build-depends:    base         >=4.18 && <4.23
++                  , text         >=2.0  && <2.3
++                  , tadka        >=2.1  && <2.2
++                  -- The 0.14 series is the one this package was written
++                  -- against (its licence, API and tokenizer behaviour were
++                  -- checked at tag 0.14.5). Widen only after re-checking.
++                  , skylighting  >=0.14 && <0.15
+diff --git a/tadka.cabal b/tadka.cabal
+index fed95f2..d5b626c 100644
+--- a/tadka.cabal
++++ b/tadka.cabal
+@@ -113,16 +113,6 @@ library
+                   , ansi-terminal                  >=1.0    && <1.2
+                   , template-haskell               >=2.20   && <2.25
+                   , aeson                          >=2.1    && <2.4
+-                  -- Optional ANSI syntax highlighting of source snippets
+-                  -- ("Tadka.Internal.Highlight", off by default via
+-                  -- 'HighlightMode'). Pinned to the 0.14 line: the same
+-                  -- major version available on the current Stackage LTS at
+-                  -- the time this bound was chosen; widen only after
+-                  -- confirming 0.15's package split (skylighting-format-ansi
+-                  -- etc. becoming separate Hackage units) still exposes the
+-                  -- same 'Skylighting.Format.ANSI' API re-exported from the
+-                  -- main 'skylighting' package.
+-                  , skylighting                    >=0.14   && <0.15
+ 
+ -- Golden test suite: independently runnable (`cabal test golden`).
+ test-suite golden
+diff --git a/test-all-ghc.sh b/test-all-ghc.sh
+index a4be3db..685e068 100755
+--- a/test-all-ghc.sh
++++ b/test-all-ghc.sh
+@@ -3,7 +3,8 @@
+ set -euo pipefail
+ 
+ VERSIONS=(
+-  
++  9.6.7
++  9.8.4
+   9.10.3
+   9.12.4
+   9.14.1

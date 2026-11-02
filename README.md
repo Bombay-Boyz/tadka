@@ -41,6 +41,15 @@ ExceptT MyError IO a
 or another error-handling design. Add a `Diagnostic` instance to describe how
 the error should be presented.
 
+For code that only propagates via exceptions — a caught `SomeException` from
+a library, or a boundary that isn't going to be rewritten to thread an
+`Either` through — `Tadka.Internal.Exception` (re-exported from `Tadka`)
+provides an opt-in bridge: `throwDiagnostic`/`catchDiagnostic` make a
+`Diagnostic` value `throwIO`/`catch`-able as an ordinary GHC exception, and
+`installPanicHook` makes an uncaught one print as a full report instead of
+GHC's default `show` dump. This is an addition alongside the
+`Either`/`ExceptT` story above, not a replacement for it.
+
 The main features are:
 
 - Source-aware diagnostics with labeled spans.
@@ -51,9 +60,17 @@ The main features are:
 - Related diagnostics and underlying cause chains.
 - Bounded rendering and cycle protection for diagnostic chains.
 - Unicode-aware source positioning, including tabs, combining characters,
-  East Asian width, and emoji.
+  East Asian width, and emoji, with full grapheme-cluster clustering so a
+  decomposed character sequence or a multi-code-point emoji is measured and
+  caret-aligned as the single character it renders as.
 - Explicit handling of stale source spans when source text has changed.
 - Adapters for GHC `SrcSpan`, Megaparsec, and Attoparsec.
+- An opt-in bridge into ordinary `throwIO`/`catch` exception propagation, and
+  an ad hoc escape hatch for turning a `Show`-only error or a caught
+  exception into a diagnostic without writing a dedicated type.
+- Optional syntax highlighting of source snippets, via `skylighting`.
+- A `SourceCode` extension point for a custom source representation, beyond
+  the built-in in-memory `NamedSource`.
 
 ## What it looks like
 
@@ -154,6 +171,29 @@ $(deriveDiagnostic defaultSpec
 The derivation API can also describe error codes, help text, URLs, primary and
 secondary labels, related diagnostics, causes, and diagnostic identity.
 
+The same spec can also be built from a flat list of directives, which reads
+closer to a co-located attribute list than a single record update:
+
+```haskell
+$(deriveDiagnostic (diagnosticSpec
+    [ diagMessage     [| \e -> pretty (parseMessage e) |]
+    , diagSource      'parseSpan
+    , diagLabel       'badBit "this bit here"
+    , diagHelp        "try doing it better next time?"
+    ]) ''ParseError)
+```
+
+This is a plain, ordinarily-typechecked builder over the same
+`DiagnosticSpec`, not a custom parser — `defaultSpec { ... }` and
+`diagnosticSpec [ ... ]` produce identical specs and remain fully
+interchangeable.
+
+A collection label field (`specLabelCollectionFields`/`diagLabelCollection`)
+normally gives every element of a runtime-sized `[Span]` field the same
+label text. When each element needs its own distinct text instead,
+`specLabelCollectionFieldsWith`/`diagLabelCollectionWith` take an `e -> [(Span,
+Text)]` expression that pairs each span with its own text directly.
+
 ## Source spans
 
 `tadka` keeps source text and source locations explicit.
@@ -203,8 +243,8 @@ coordinates stored by an error value.
 - `TJson` — machine-readable JSON output.
 
 A `Config` controls reporting behavior such as color, Unicode, hyperlinks,
-context lines, tab width, related-diagnostic depth, label palettes, and the
-selected target.
+context lines, tab width, related-diagnostic depth, label palettes, cause
+rendering, syntax highlighting, and the selected target.
 
 For example:
 
@@ -217,8 +257,30 @@ let config =
 reportDiagnostic config err
 ```
 
+Unlike color and Unicode, which default to `*Auto` (detected from the
+destination), `withHyperlinkMode` defaults to `HyperlinkNever`: OSC 8 (the
+terminal escape sequence used for clickable text) has no reliable capability
+query the way TTY-ness does, so a terminal that otherwise looks interactive
+may still not render the escape as a link. Call `withHyperlinkMode
+HyperlinkAuto` (or `HyperlinkAlways`) to opt in to hyperlinked `= see:` URLs.
+
+By default, a diagnostic's own cause chain (`diagnosticCause`) renders as a
+lightweight, single-line summary — code and message only — even when the
+cause is itself a rich `Diagnostic` with its own spans. Call
+`withCauseDetail CauseFull` for a cause to render as a fully nested report,
+the same way a `related` diagnostic already does.
+
+Source snippets are plain text by default. Call `withHighlightMode
+HighlightAuto` to tokenize each snippet via its source's own name (matched
+by extension/filename), or `withHighlightMode (HighlightLanguage "...")` to
+force a specific syntax regardless of source name. Highlighting is always
+suppressed under `ColorNever`, since there is no plain-text form of a
+colourised token stream to degrade to.
+
 The renderer selection and lower-level rendering APIs are also available when
-applications need more control.
+applications need more control, including `reportDiagnosticTo`/
+`renderDiagnosticTo` for writing to a `Handle` other than `stdout` (e.g.
+`stderr`, a log sink) or getting back the rendered `Text` directly.
 
 ## Existing error types
 
@@ -330,7 +392,8 @@ It intentionally does not attempt to be all of the following at once:
 - an application-wide error-handling framework
 - an LSP implementation
 - an editor integration layer
-- a syntax-highlighting engine
+- a syntax-highlighting engine (snippet highlighting is optional and backed
+  by the existing `skylighting` library, not a tokenizer tadka builds itself)
 - a general-purpose logging framework
 - a replacement for parser-specific error types
 

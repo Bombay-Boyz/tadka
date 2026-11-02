@@ -7,6 +7,8 @@ module Tadka.Internal.Config
   , ColorMode (..)
   , UnicodeMode (..)
   , HyperlinkMode (..)
+  , CauseDetail (..)
+  , Highlighter (..)
     -- * Config (opaque)
   , Config
   , defaultConfig
@@ -20,6 +22,9 @@ module Tadka.Internal.Config
   , withContextLines
   , withLabelPalette
   , withTarget
+  , withCauseDetail
+  , withHighlighter
+  , withoutHighlighter
     -- * Internal field accessors (for selectRenderer only; not re-exported by "Tadka")
   , configColorMode
   , configUnicodeMode
@@ -29,9 +34,12 @@ module Tadka.Internal.Config
   , configContextLines
   , configPalette
   , configTarget
+  , configCauseDetail
+  , configHighlighter
   ) where
 
 import           Data.List.NonEmpty            (NonEmpty (..))
+import           Data.Text                     (Text)
 import           Numeric.Natural               (Natural)
 import           Prettyprinter.Render.Terminal (AnsiStyle, Color (..), color)
 
@@ -56,6 +64,45 @@ data UnicodeMode = UnicodeAuto | UnicodeAlways | UnicodeAscii
 data HyperlinkMode = HyperlinkAuto | HyperlinkAlways | HyperlinkNever
   deriving (Eq, Show, Enum, Bounded)
 
+-- | How a diagnostic's @diagnosticCause@ chain is rendered, relative to its
+-- (tree-shaped) @related@ diagnostics, which always get a fully nested
+-- report. 'CauseSummary' is the historical, default behaviour (a single
+-- @"= caused by: ..."@ line per cause, carrying only its code and message);
+-- 'CauseFull' nests each cause's own snippet, help\/see lines, and related
+-- forest, exactly the way a related diagnostic already renders — closing
+-- the asymmetry a cause that is itself a rich 'Diagnostic' used to suffer
+-- (its own spans and labels were simply dropped from the report).
+data CauseDetail = CauseSummary | CauseFull
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | A syntax highlighter for source snippets, supplied by the application
+-- (or by the separate @tadka-highlight@ package). The core library has no
+-- tokenizer of its own and no dependency on one.
+--
+-- 'runHighlighter' receives the source's name (usually a file path) and
+-- /all/ of the source's lines, already tab-expanded and with control
+-- characters replaced by spaces. It returns 'Nothing' when it declines to
+-- highlight this source, or exactly one output line per input line. The
+-- renderer only accepts an output line if removing its SGR colour escapes
+-- (@ESC [ ... m@) gives back exactly the plain line, so a highlighter can add
+-- colour but can never change the text, move a caret, or inject any other
+-- terminal escape. A line failing that check is shown as plain text.
+--
+-- Highlighting is ignored under 'ColorNever'.
+data Highlighter = Highlighter
+  { highlighterName :: Text
+    -- ^ identifies the highlighter; the only thing 'Eq' and 'Show' compare\/show.
+  , runHighlighter  :: Text -> [Text] -> Maybe [Text]
+    -- ^ source name -> plain lines -> highlighted lines.
+  }
+
+instance Eq Highlighter where
+  a == b = highlighterName a == highlighterName b
+
+instance Show Highlighter where
+  showsPrec d h = showParen (d > 10) $
+    showString "Highlighter " . shows (highlighterName h)
+
 -- | Opaque rendering configuration. Build from 'defaultConfig' with the
 -- @with*@ setters.
 data Config = Config
@@ -67,6 +114,8 @@ data Config = Config
   , configTabWidth      :: Int            -- ^ tab stop width for source rendering (>= 1)
   , configContextLines  :: Maybe Int      -- ^ 'Nothing' = contiguous range; 'Just' n = n context lines + elision
   , configTarget        :: Maybe Target   -- ^ 'Nothing' = auto; 'Just' = explicit override.
+  , configCauseDetail   :: CauseDetail    -- ^ summary line vs. full nested report per cause.
+  , configHighlighter   :: Maybe Highlighter  -- ^ 'Nothing' = plain snippets (the default).
   }
   deriving (Eq, Show)
 
@@ -95,6 +144,8 @@ defaultConfig = Config
   , configTabWidth      = 4
   , configContextLines  = Nothing
   , configTarget        = Nothing
+  , configCauseDetail   = CauseSummary
+  , configHighlighter   = Nothing
   }
 
 withColorMode :: ColorMode -> Config -> Config
@@ -124,3 +175,18 @@ withLabelPalette p c = c { configPalette = p }
 -- | Explicitly force a render target, overriding auto-detection.
 withTarget :: Target -> Config -> Config
 withTarget t c = c { configTarget = Just t }
+
+-- | Choose how a diagnostic's cause chain is rendered: a summary line
+-- ('CauseSummary', the default) or a full nested report per cause
+-- ('CauseFull').
+withCauseDetail :: CauseDetail -> Config -> Config
+withCauseDetail d c = c { configCauseDetail = d }
+
+-- | Syntax-highlight source snippets with the given 'Highlighter'. Off by
+-- default.
+withHighlighter :: Highlighter -> Config -> Config
+withHighlighter h c = c { configHighlighter = Just h }
+
+-- | Turn syntax highlighting off (the default).
+withoutHighlighter :: Config -> Config
+withoutHighlighter c = c { configHighlighter = Nothing }

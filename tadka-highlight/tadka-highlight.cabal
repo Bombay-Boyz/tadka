@@ -1,0 +1,47 @@
+cabal-version:      3.0
+name:               tadka-highlight
+version:            0.1.0.0
+synopsis:           Syntax highlighting for Tadka diagnostics, via skylighting
+description:
+  A 'Tadka.Highlighter' backed by the @skylighting@ package, for colouring
+  source snippets in Tadka's graphical reports.
+  .
+  /Licence note./ @skylighting@ is distributed under the GPL (version 2). This
+  package is therefore GPL-2.0-only as well, and a program that links it is
+  subject to the GPL. The @tadka@ package itself has no dependency on
+  @skylighting@ and is unaffected; only programs that choose to depend on
+  @tadka-highlight@ are.
+category:           Development, Error Handling
+license:            GPL-2.0-only
+author:             Sabrinathan Nair
+maintainer:         259497327+Bombay-Boyz@users.noreply.github.com
+copyright:          (c) 2026 Bombay-Boyz
+homepage:           https://github.com/Bombay-Boyz/tadka
+bug-reports:        https://github.com/Bombay-Boyz/tadka/issues
+build-type:         Simple
+tested-with:        GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
+
+flag werror
+  description: Treat warnings as errors (enable in dev/CI, off for releases).
+  default:     False
+  manual:      True
+
+library
+  default-language: GHC2021
+  ghc-options:      -Wall
+                    -Wcompat
+                    -Wredundant-constraints
+                    -Wincomplete-record-updates
+                    -Wincomplete-uni-patterns
+                    -Wpartial-fields
+  if flag(werror)
+    ghc-options:    -Werror
+  hs-source-dirs:   src
+  exposed-modules:  Tadka.Highlight.Skylighting
+  build-depends:    base         >=4.18 && <4.23
+                  , text         >=2.0  && <2.3
+                  , tadka        >=2.1  && <2.2
+                  -- The 0.14 series is the one this package was written
+                  -- against (its licence, API and tokenizer behaviour were
+                  -- checked at tag 0.14.5). Widen only after re-checking.
+                  , skylighting  >=0.14 && <0.15

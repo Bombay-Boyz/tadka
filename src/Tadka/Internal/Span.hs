@@ -30,12 +30,11 @@ module Tadka.Internal.Span
   ) where
 
 import           Data.Bifunctor (first)
-import           Data.Text      (Text)
-import qualified Data.Text      as T
 
+import           Tadka.Internal.SourceCode (SourceCode (..))
 import           Tadka.Internal.Types
-                   (Length, NamedSource, Offset, LengthError, OffsetError,
-                    mkLength, mkOffset, sourceText, unLength, unOffset)
+                   (Length, LineCol (..), Offset, LengthError, OffsetError,
+                    mkLength, mkOffset, unLength, unOffset)
 
 -- | Whether a span has been checked against a concrete source.
 data Resolution = Unresolved | Resolved
@@ -57,13 +56,6 @@ type Span = SpanF 'Unresolved
 -- | A resolved span: positions checked against a specific source, with
 -- computed start/end line-column pairs.
 type ResolvedSpan = SpanF 'Resolved
-
--- | A one-based line/column position.
-data LineCol = LineCol
-  { lcLine   :: !Int
-  , lcColumn :: !Int
-  }
-  deriving (Eq, Ord, Show)
 
 -- | Why 'mkSpan' rejected its inputs.
 data SpanBuildError
@@ -116,7 +108,7 @@ spanErrorReason SpanOutOfBoundsError{} = SpanOutOfBounds
 -- | Resolve a span against a source, computing its line/column positions.
 -- Fails with 'SpanOutOfBoundsError' if the span's end lies beyond the source.
 -- Offsets and lengths are measured in characters (code points).
-resolveSpan :: NamedSource -> Span -> Either SpanError ResolvedSpan
+resolveSpan :: SourceCode s => s -> Span -> Either SpanError ResolvedSpan
 resolveSpan src (RawSpan off len) =
   if end > toInteger n
     then Left
@@ -129,20 +121,10 @@ resolveSpan src (RawSpan off len) =
         (ResolvedSpan
           off
           len
-          (offsetToLineCol txt o)
-          (offsetToLineCol txt (fromInteger end)))
+          (scLocate src o)
+          (scLocate src (fromInteger end)))
   where
-    txt = sourceText src
     o   = unOffset off
     l   = unLength len
     end = toInteger o + toInteger l
-    n   = T.length txt
-
--- | One-based line/column of a character offset into the text. Assumes
--- @0 <= off <= T.length txt@ (guaranteed by 'resolveSpan''s bounds check).
-offsetToLineCol :: Text -> Int -> LineCol
-offsetToLineCol txt off = LineCol lineNo col
-  where
-    prefix = T.take off txt
-    lineNo = T.count "\n" prefix + 1
-    col    = T.length (snd (T.breakOnEnd "\n" prefix)) + 1
+    n   = scLength src
