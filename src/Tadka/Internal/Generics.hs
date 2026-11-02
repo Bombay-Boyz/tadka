@@ -27,6 +27,7 @@ import           GHC.TypeLits           (ErrorMessage (..), Nat, TypeError, type
 import           Prettyprinter          (pretty)
 
 import           Tadka.Internal.Context (Context (..), buildContext)
+import           Tadka.Internal.SourceCode (SomeSource, someSource)
 import           Tadka.Internal.Span    (Span)
 import           Tadka.Internal.Types   (NamedSource)
 
@@ -48,7 +49,7 @@ genericContext e =
 -- a generic representation. Field values are classified by 'cast', so only
 -- 'NamedSource'- and 'Span'-typed fields contribute; all others are ignored.
 class GCollect f where
-  gcollect :: f p -> ([NamedSource], [(Text, Span)])
+  gcollect :: f p -> ([SomeSource], [(Text, Span)])
 
 instance GCollect f => GCollect (M1 D d f) where gcollect (M1 x) = gcollect x
 instance GCollect f => GCollect (M1 C c f) where gcollect (M1 x) = gcollect x
@@ -59,12 +60,14 @@ instance (GCollect a, GCollect b) => GCollect (a :*: b) where
 instance (Selector s, Typeable c) => GCollect (M1 S s (K1 R c)) where
   gcollect m@(M1 (K1 v)) =
     case cast v of
-      Just (src :: NamedSource) -> ([src], [])
+      Just (src :: NamedSource) -> ([someSource src], [])
       Nothing -> case cast v of
-        Just (sp :: Span) -> ([], [(T.pack (selName m), sp)])
+        Just (src :: SomeSource) -> ([src], [])
         Nothing -> case cast v of
-          Just (sps :: [Span]) -> ([], [ (T.pack (selName m), sp) | sp <- sps ])
-          Nothing               -> ([], [])
+          Just (sp :: Span) -> ([], [(T.pack (selName m), sp)])
+          Nothing -> case cast v of
+            Just (sps :: [Span]) -> ([], [ (T.pack (selName m), sp) | sp <- sps ])
+            Nothing               -> ([], [])
 
 instance GCollect U1 where gcollect _ = ([], [])
 instance GCollect V1 where gcollect _ = ([], [])
@@ -72,7 +75,7 @@ instance GCollect V1 where gcollect _ = ([], [])
 -- === Compile-time shape check ==============================================
 
 type OneSourceManySpans e =
-  ( CheckSource (CountField NamedSource (Rep e))
+  ( CheckSource (CountSources (Rep e))
   , CheckSpans  (CountSpanFields (Rep e))
   )
 
@@ -81,14 +84,15 @@ type OneSourceManySpans e =
 -- must not accidentally satisfy a Span count, which is exactly the silent-drop
 -- bug this fix removes — hence 'CountSpanFields' below is a separate family
 -- rather than an overload of this one.
-type family CountField (t :: Type) (f :: Type -> Type) :: Nat where
-  CountField t (M1 D d f)          = CountField t f
-  CountField t (M1 C c f)          = CountField t f
-  CountField t (a :*: b)           = CountField t a + CountField t b
-  CountField t (M1 S s (K1 R t))   = 1
-  CountField t (M1 S s (K1 R c))   = 0
-  CountField t U1                  = 0
-  CountField t V1                  = 0
+type family CountSources (f :: Type -> Type) :: Nat where
+  CountSources (M1 D d f)                    = CountSources f
+  CountSources (M1 C c f)                    = CountSources f
+  CountSources (a :*: b)                     = CountSources a + CountSources b
+  CountSources (M1 S s (K1 R NamedSource))   = 1
+  CountSources (M1 S s (K1 R SomeSource))    = 1
+  CountSources (M1 S s (K1 R c))             = 0
+  CountSources U1                            = 0
+  CountSources V1                            = 0
 
 -- Count fields that 'gcollect' can turn into span labels: a scalar 'Span' or
 -- a '[Span]' field, either one counting as one "this record has spans"
@@ -108,7 +112,7 @@ type family CountSpanFields (f :: Type -> Type) :: Nat where
 type family CheckSource (n :: Nat) :: Constraint where
   CheckSource 1 = ()
   CheckSource n = TypeError
-    ('Text "genericContext: the record must have exactly one NamedSource field, but has "
+    ('Text "genericContext: the record must have exactly one NamedSource field (or one SomeSource field), but has "
        ':<>: 'ShowType n)
 
 type family CheckSpans (n :: Nat) :: Constraint where

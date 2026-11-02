@@ -11,6 +11,7 @@
 -- No compatibility guarantee.
 module Tadka.Internal.Renderer.Narratable
   ( NarratableOptions (..)
+  , narratableOptions
   , renderNarratable
   , toProseMarker
   ) where
@@ -26,6 +27,9 @@ import           Prettyprinter                         (Doc, LayoutOptions (..),
 import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated, treeForm)
 
 import           Tadka.Internal.Ann                    (Ann (..))
+import           Tadka.Internal.Config                 (CauseDetail (..), Config,
+                                                        configCauseDetail,
+                                                        configRelatedDepth)
 import           Tadka.Internal.Context                (Context, LabelKind (..),
                                                         LabelState (..), Labeled (..),
                                                         SourceGroup (..), contextSourceGroups)
@@ -43,9 +47,20 @@ import           Tadka.Internal.Types                  (Severity, SeverityLabels
 
 -- | Resolved settings for the narratable handler (populated only by
 -- @selectRenderer@).
-newtype NarratableOptions = NarratableOptions
-  { noRelatedDepth :: Natural }
+data NarratableOptions = NarratableOptions
+  { noRelatedDepth :: Natural
+  , noCauseDetail  :: CauseDetail
+  }
   deriving (Eq, Show)
+
+-- | The narratable handler's settings, read from a 'Config'. This is the one
+-- place a 'NarratableOptions' is built, so a new option is added here and
+-- nowhere else.
+narratableOptions :: Config -> NarratableOptions
+narratableOptions cfg = NarratableOptions
+  { noRelatedDepth = configRelatedDepth cfg
+  , noCauseDetail  = configCauseDetail cfg
+  }
 
 -- | How an 'Ann' is marked in prose. Inline code and file names are surrounded
 -- with quotes so they read as distinct tokens; emphasis and keywords carry no
@@ -72,8 +87,10 @@ renderProse opts sd@(SomeDiagnostic e) =
      headerSentence (severity e) (fmap unDiagnosticCode (code e)) (docToProse (message e))
    : contextSentences (context e)
   ++ helpSentences (fmap docToProse (help e)) (fmap unUrl (url e))
-  ++ causeSentences (walkCauses (noRelatedDepth opts) sd)
-  ++ relatedSentences opts (walkRelated (noRelatedDepth opts) sd)
+  ++ causeSentences opts fuel (walkCauses (noRelatedDepth opts) sd)
+  ++ relatedSentences opts fuel (walkRelated (noRelatedDepth opts) sd)
+  where
+    fuel = noRelatedDepth opts
 
 -- === Header ===============================================================
 
@@ -143,20 +160,20 @@ helpSentences mhelp murl =
 
 -- === Related ==============================================================
 
-relatedSentences :: NarratableOptions -> RelatedTree -> [Text]
-relatedSentences opts (RelatedTree rootDiag children term) =
-     concatMap (relatedChild opts) children
+relatedSentences :: NarratableOptions -> Natural -> RelatedTree -> [Text]
+relatedSentences opts fuel (RelatedTree rootDiag children term) =
+     concatMap (relatedChild opts fuel) children
   ++ truncationNote term (numRelated rootDiag)
 
-relatedChild :: NarratableOptions -> RelatedTree -> [Text]
-relatedChild opts (RelatedTree childDiag kids term) = case term of
+relatedChild :: NarratableOptions -> Natural -> RelatedTree -> [Text]
+relatedChild opts fuel (RelatedTree childDiag kids term) = case term of
   CycleOmitted -> [ "A related diagnostic was omitted because it forms a cycle." ]
   _ ->
        ("Related: " <> summaryProse childDiag <> ".")
        -- Same call, same shape, as 'renderProse': a related diagnostic's own
        -- cause chain reads exactly as the root's would, just nested here.
-     : causeSentences (walkCauses (noRelatedDepth opts) childDiag)
-    ++ concatMap (relatedChild opts) kids
+     : causeSentences opts fuel (walkCauses (noRelatedDepth opts) childDiag)
+    ++ concatMap (relatedChild opts fuel) kids
     ++ truncationNote term (numRelated childDiag)
 
 truncationNote :: TerminationReason -> Int -> [Text]
@@ -168,8 +185,29 @@ plural :: Int -> Text
 plural 1 = " was"
 plural _ = "s were"
 
-causeSentences :: [SomeDiagnostic] -> [Text]
-causeSentences = map (\c -> "Caused by: " <> summaryProse c <> ".")
+-- | Prose for a diagnostic's cause chain. Under 'CauseSummary' (the
+-- default) each cause is one sentence: its code and message. Under
+-- 'CauseFull' each cause also gets its own location\/source-line\/label
+-- sentences, help\/more-information sentences, and related-diagnostic
+-- sentences — what 'renderProse' would say about it standalone — read right
+-- after its own "Caused by" sentence, before the next cause in the chain.
+--
+-- @fuel@ bounds how deeply full cause detail may nest through related
+-- diagnostics and their own causes (see the graphical renderer's
+-- @causeLinesFor@ for the reasoning). Each full cause spends one unit; at
+-- zero fuel a cause is a single summary sentence.
+causeSentences :: NarratableOptions -> Natural -> [SomeDiagnostic] -> [Text]
+causeSentences opts fuel cs = case noCauseDetail opts of
+  CauseFull | fuel > 0 -> concatMap fullCause cs
+  _                    -> map summary cs
+  where
+    summary c = "Caused by: " <> summaryProse c <> "."
+
+    fullCause c@(SomeDiagnostic ce) =
+         summary c
+       : contextSentences (context ce)
+      ++ helpSentences (fmap docToProse (help ce)) (fmap unUrl (url ce))
+      ++ relatedSentences opts (fuel - 1) (walkRelated (noRelatedDepth opts) c)
 
 summaryProse :: SomeDiagnostic -> Text
 summaryProse (SomeDiagnostic e) = case code e of

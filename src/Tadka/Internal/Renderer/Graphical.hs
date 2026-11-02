@@ -18,6 +18,7 @@
 -- No compatibility guarantee.
 module Tadka.Internal.Renderer.Graphical
   ( GraphicalOptions (..)
+  , graphicalOptions
   , renderGraphical
     -- * Layout internals (exposed for property tests)
   , caretLayout
@@ -40,11 +41,17 @@ import qualified Prettyprinter.Render.Terminal as Term
 import           Prettyprinter.Render.Util.SimpleDocTree (renderSimplyDecorated, treeForm)
 
 import           Tadka.Internal.Ann            (Ann (..))
-import           Tadka.Internal.Config         (ColorMode (..), HyperlinkMode (..),
-                                                UnicodeMode (..))
+import           Tadka.Internal.Config         (CauseDetail (..), ColorMode (..), Config,
+                                                Highlighter, HyperlinkMode (..),
+                                                UnicodeMode (..), configCauseDetail,
+                                                configColorMode, configContextLines,
+                                                configHighlighter, configHyperlinkMode,
+                                                configPalette, configRelatedDepth,
+                                                configTabWidth, configUnicodeMode)
 import           Tadka.Internal.Context        (Context, LabelKind (..),
                                                 LabelState (..), Labeled (..),
                                                 SourceGroup (..), contextSourceGroups)
+import           Tadka.Internal.Highlight      (applyHighlighter, highlightLine)
 import           Tadka.Internal.SourceCode     (SourceCode (..))
 import           Tadka.Internal.Renderer.LinePlan (PlanEntry (..), planLines)
 import           Tadka.Internal.Renderer.Layout   (CellKind (..), assignLanes,
@@ -70,8 +77,27 @@ data GraphicalOptions = GraphicalOptions
   , goRelatedDepth  :: Natural
   , goTabWidth      :: Int
   , goContextLines  :: Maybe Int
+  , goCauseDetail   :: CauseDetail
+  , goHighlighter   :: Maybe Highlighter
   }
   deriving (Eq, Show)
+
+-- | The graphical handler's settings, read from a 'Config' whose terminal
+-- capabilities are already resolved (no @Auto@ modes left). This is the one
+-- place a 'GraphicalOptions' is built, so a new option is added here and
+-- nowhere else.
+graphicalOptions :: Config -> GraphicalOptions
+graphicalOptions cfg = GraphicalOptions
+  { goColorMode     = configColorMode cfg
+  , goUnicodeMode   = configUnicodeMode cfg
+  , goHyperlinkMode = configHyperlinkMode cfg
+  , goPalette       = configPalette cfg
+  , goRelatedDepth  = configRelatedDepth cfg
+  , goTabWidth      = configTabWidth cfg
+  , goContextLines  = configContextLines cfg
+  , goCauseDetail   = configCauseDetail cfg
+  , goHighlighter   = configHighlighter cfg
+  }
 
 -- | Box-drawing glyph set, selected by 'UnicodeMode'.
 data Glyphs = Glyphs
@@ -209,25 +235,64 @@ renderRoot opts sd@(SomeDiagnostic e) =
   where
     glyphs   = glyphsFor (goUnicodeMode opts)
     cmode    = goColorMode opts
+    fuel     = goRelatedDepth opts
     gw       = gutterWidth (context e)
     eqIndent = T.replicate (gw + 1) " "
     header   = headerLine cmode (severity e) (code e) (docToStyledText cmode (message e))
-    snip     = snippetLines glyphs (severity e) cmode (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
+    snip     = snippetLines glyphs (severity e) cmode (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
     trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
-                 ++ causeLinesFor opts cmode glyphs eqIndent sd
-                 ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
+                 ++ causeLinesFor opts fuel cmode glyphs eqIndent sd
+                 ++ relatedForest opts fuel glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
 
 -- | The "= caused by: ..." lines for a diagnostic's own 'diagnosticCause'
 -- chain, indented to the given column. Shared by 'renderRoot' and every
 -- 'relatedChild' so a diagnostic's causes render identically regardless of
--- where in the report it appears: a related diagnostic's cause chain is not
--- a second-class citizen relative to the root's.
-causeLinesFor :: GraphicalOptions -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
-causeLinesFor opts cmode glyphs indent sd =
-  [ indent <> "= caused by: " <> summaryOf cmode glyphs c
-  | c <- walkCauses (goRelatedDepth opts) sd ]
+-- where in the report it appears.
+--
+-- Under 'CauseSummary' (the default) each cause is one line: its code and
+-- message. Under 'CauseFull' each cause also gets its own snippet, help\/see
+-- lines and related forest, nested one level deeper per cause.
+--
+-- The @fuel@ argument is what makes 'CauseFull' terminate. Rendering a cause
+-- in full can reach more related diagnostics, whose own causes are rendered
+-- in full in turn, and a cyclic structure never repeats a 'diagnosticId'
+-- within any single bounded walk. Every step into a cause's full rendering
+-- therefore spends one unit of fuel, and at zero fuel a cause is rendered as
+-- its summary line only. Fuel starts at the related-depth limit.
+causeLinesFor :: GraphicalOptions -> Natural -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
+causeLinesFor opts fuel cmode glyphs indent sd = case goCauseDetail opts of
+  CauseFull -> causeChain fuel indent chain
+  CauseSummary -> summaries indent chain
+  where
+    chain = walkCauses (goRelatedDepth opts) sd
+
+    nest :: Text
+    nest = "  "
+
+    summaries :: Text -> [SomeDiagnostic] -> [Text]
+    summaries ind cs = [ ind <> "= caused by: " <> summaryOf cmode glyphs c | c <- cs ]
+
+    causeChain :: Natural -> Text -> [SomeDiagnostic] -> [Text]
+    causeChain _ _ [] = []
+    causeChain f ind cs@(c@(SomeDiagnostic ce) : rest)
+      | f == 0    = summaries ind cs
+      | otherwise =
+          (ind <> "= caused by: " <> summaryOf cmode glyphs c)
+            : map (nest <>) (ownSnippet ++ ownHelpSee ++ ownSep ++ ownRelated ++ ownRest)
+      where
+        ownGw      = gutterWidth (context ce)
+        ownIndent  = T.replicate (ownGw + 1) " "
+        ownSnippet = snippetLines glyphs (severity ce) cmode (goHighlighter opts) (goPalette opts)
+                       (goTabWidth opts) (goContextLines opts) ownGw (context ce)
+        ownHelpSee = helpSeeLines ownGw (fmap (docToStyledText cmode) (help ce))
+                       (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url ce))
+        ownRelated = relatedForest opts (f - 1) glyphs ownGw ownIndent
+                       (walkRelated (goRelatedDepth opts) c)
+        ownRest    = causeChain (f - 1) ownIndent rest
+        ownSep     = [ ownIndent <> gRail glyphs
+                     | not (null ownSnippet) && not (null (ownHelpSee ++ ownRelated ++ ownRest)) ]
 
 -- === Header ===============================================================
 
@@ -259,19 +324,31 @@ gutterWidth ctx = length (show (foldr max 1 (concatMap okEndLines (contextSource
 -- block 'groupSnippetLines' always produced, with no separator: this is a
 -- strict generalisation, not a different rendering for the case that already
 -- worked.
-snippetLines :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int -> Context -> [Text]
-snippetLines glyphs sev cmode palette tabW ctxLines gw ctx =
-  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode palette tabW ctxLines gw)
+snippetLines
+  :: Glyphs -> Severity -> ColorMode -> Maybe Highlighter -> NonEmpty AnsiStyle -> Int -> Maybe Int
+  -> Int -> Context -> [Text]
+snippetLines glyphs sev cmode hl palette tabW ctxLines gw ctx =
+  intercalate [groupSep] (map (groupSnippetLines glyphs sev cmode hl palette tabW ctxLines gw)
                               (contextSourceGroups ctx))
   where
     groupSep = T.replicate (gw + 1) " " <> gRail glyphs
 
 groupSnippetLines
-  :: Glyphs -> Severity -> ColorMode -> NonEmpty AnsiStyle -> Int -> Maybe Int -> Int
-  -> SourceGroup -> [Text]
-groupSnippetLines glyphs sev cmode palette tabW ctxLines gw (SourceGroup src labels) =
+  :: Glyphs -> Severity -> ColorMode -> Maybe Highlighter -> NonEmpty AnsiStyle -> Int -> Maybe Int
+  -> Int -> SourceGroup -> [Text]
+groupSnippetLines glyphs sev cmode hl palette tabW ctxLines gw (SourceGroup src labels) =
   [locationLine, railBlank] ++ body
   where
+    -- Highlighting is only meaningful under colour; under 'ColorNever' the
+    -- highlighter is not run at all, so plain-text output is unchanged. The
+    -- highlighter sees exactly the text this renderer would print (control
+    -- characters replaced, tabs expanded), and 'highlightLine' only accepts
+    -- its answer for a line if it is that same text plus SGR colour codes.
+    effHl = case cmode of
+      ColorNever -> Nothing
+      _          -> hl
+    plainLines = [ expandTabs tabW (sanitizeLine t) | (_, t) <- scLines src (1, scLineCount src) ]
+    mHighlighted = effHl >>= \h -> applyHighlighter h (scName src) plainLines
     indexed = zip [0 ..] (NE.toList labels)
     -- Per-kind rank (0-based, "how many earlier labels share this one's
     -- kind"), computed once over the OK labels in original document order and
@@ -339,9 +416,10 @@ groupSnippetLines glyphs sev cmode palette tabW ctxLines gw (SourceGroup src lab
     renderEntry win (ShowLine l)   = lineWithCarets win l
     lineWithCarets win l = numbered : caretsHere
       where
-        srcLine  = sanitizeLine (lineLookup win l)
-        numbered = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " "
-                     <> srcGutter l <> expandTabs tabW srcLine <> mlSuffix l
+        srcLine   = sanitizeLine (lineLookup win l)
+        displayed = highlightLine mHighlighted l (expandTabs tabW srcLine)
+        numbered  = T.justifyRight gw ' ' (tshow l) <> " " <> gRail glyphs <> " "
+                     <> srcGutter l <> displayed <> mlSuffix l
         caretsHere =
           [ caretLine l i rs k rank txt srcLine
           | (i, rs, k, rank, txt) <- oks, not (isMulti rs), startLineOf rs == l ]
@@ -373,9 +451,9 @@ helpSeeLines gw mhelp murl =
 -- === Related nesting ======================================================
 
 -- Render the related section under a parent, given the parent's eq-line indent.
-relatedForest :: GraphicalOptions -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
-relatedForest opts glyphs _gw indent (RelatedTree parentDiag children term) =
-     concatMap (relatedChild opts glyphs indent) children
+relatedForest :: GraphicalOptions -> Natural -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
+relatedForest opts fuel glyphs _gw indent (RelatedTree parentDiag children term) =
+     concatMap (relatedChild opts fuel glyphs indent) children
   ++ depthNote
   where
     depthNote = case term of
@@ -384,8 +462,8 @@ relatedForest opts glyphs _gw indent (RelatedTree parentDiag children term) =
                 <> " more related diagnostics omitted)"]
       _ -> []
 
-relatedChild :: GraphicalOptions -> Glyphs -> Text -> RelatedTree -> [Text]
-relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
+relatedChild :: GraphicalOptions -> Natural -> Glyphs -> Text -> RelatedTree -> [Text]
+relatedChild opts fuel glyphs indent node@(RelatedTree childDiag _ term) =
   case term of
     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
     _ ->
@@ -396,11 +474,11 @@ relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
     childGw     = withDiag childDiag (gutterWidth . context)
     childIndent = T.replicate (childGw + 1) " "
     childSnippet = withDiag childDiag
-      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
+      (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
     -- Same call, same shape, as 'renderRoot': a related diagnostic's own
     -- "caused by" chain renders exactly as the root's would, just nested.
-    childCauses  = causeLinesFor opts (goColorMode opts) glyphs childIndent childDiag
-    childRelated = relatedForest opts glyphs childGw childIndent node
+    childCauses  = causeLinesFor opts fuel (goColorMode opts) glyphs childIndent childDiag
+    childRelated = relatedForest opts fuel glyphs childGw childIndent node
     childSep     = [childIndent <> gRail glyphs
                    | not (null childSnippet) && not (null (childCauses ++ childRelated))]
 

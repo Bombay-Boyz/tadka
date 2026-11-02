@@ -12,5 +12,6 @@
   ],
   "causes": [],
   "truncated": false,
-  "cycleOmitted": false
+  "cycleOmitted": false,
+  "schemaVersion": 1
 }

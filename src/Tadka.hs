@@ -16,6 +16,18 @@ module Tadka
   , sourceText
   , mkNamedSource
   , SourceError (..)
+    -- * Pluggable sources
+    --
+    -- The extension point for "bring your own source representation" (a rope
+    -- buffer, an LSP virtual document, a streamed huge file): write a
+    -- 'SourceCode' instance alongside the built-in 'NamedSource' one. Every
+    -- context builder, 'resolveSpan', the renderers and both derive macros
+    -- accept it: pass your value to 'buildContext' and friends, or keep it in
+    -- a 'SomeSource' field of a derived record. 'SomeSource' also lets one
+    -- multi-source context mix source types.
+  , SourceCode (..)
+  , SomeSource (..)
+  , someSource
     -- * Spans
     --
     -- Spans are the public position type; @Offset@\/@Length@ are the internal
@@ -37,6 +49,36 @@ module Tadka
     -- * The Diagnostic class
   , Diagnostic (..)
   , SomeDiagnostic (..)
+    -- * Exception-propagation bridge
+    --
+    -- 'Diagnostic' deliberately has no 'Control.Exception.Exception'
+    -- superclass or instance (see "Tadka.Internal.Exception"); these are the
+    -- one, documented way to make a 'Diagnostic' value participate in
+    -- ordinary 'Control.Exception.throwIO'\/'Control.Exception.catch'
+    -- propagation, and to install it as GHC's top-level uncaught-exception
+    -- printer (the Haskell analogue of miette's @set_panic_hook@).
+  , DiagnosticException (..)
+  , diagnosticShow
+  , throwDiagnostic
+  , catchDiagnostic
+  , installPanicHook
+    -- * Ad hoc diagnostics
+    --
+    -- The "I just want /something/ printed nicely right now" escape hatch:
+    -- lift a 'Show'-only error, a caught 'Control.Exception.SomeException',
+    -- or a plain message into a minimal 'Diagnostic', without writing a
+    -- dedicated type for it. See "Tadka.Internal.AdHoc".
+  , AdHocDiagnostic
+  , adHoc
+  , wrapErr
+  , intoDiagnostic
+  , fromError
+  , fromSomeException
+  , withCode
+  , withSeverity
+  , withHelp
+  , withUrl
+  , withSourceCode
     -- * Context
   , Context (NoContext)
   , Labeled (..)
@@ -66,9 +108,14 @@ module Tadka
   , withContextLines
   , withLabelPalette
   , withTarget
+  , withCauseDetail
+  , withHighlighter
+  , withoutHighlighter
   , ColorMode (..)
   , UnicodeMode (..)
   , HyperlinkMode (..)
+  , CauseDetail (..)
+  , Highlighter (..)
     -- * Renderers and the render path
   , Target (..)
   , Output
@@ -80,9 +127,29 @@ module Tadka
   , selectRenderer
   , render
   , reportDiagnostic
+  , reportDiagnosticTo
+  , renderDiagnosticTo
     -- * Derive macro
   , DiagnosticSpec (..)
   , defaultSpec
+    -- ** A flatter, declarative alternative to a 'defaultSpec' record update
+  , SpecEntry
+  , diagnosticSpec
+  , diagCode
+  , diagSeverity
+  , diagHelp
+  , diagUrl
+  , diagSource
+  , diagLabel
+  , diagSecondaryLabel
+  , diagLabelCollection
+  , diagSecondaryLabelCollection
+  , diagLabelCollectionWith
+  , diagSecondaryLabelCollectionWith
+  , diagRelated
+  , diagCause
+  , diagId
+  , diagMessage
   , deriveDiagnostic
   , DiagnosticSumSpec
   , deriveDiagnosticSum
@@ -106,15 +173,18 @@ module Tadka
   , mkDiagnosticId
   ) where
 
+import Tadka.Internal.AdHoc
 import Tadka.Internal.Ann
 import Tadka.Internal.Config
 import Tadka.Internal.Context
 import Tadka.Internal.Diagnostic
+import Tadka.Internal.Exception
 import Tadka.Internal.Generics (genericContext)
 import Tadka.Internal.Render
 import Tadka.Internal.Renderer.Graphical (GraphicalOptions)
 import Tadka.Internal.Renderer.Json (JsonOptions)
 import Tadka.Internal.Renderer.Narratable (NarratableOptions)
+import Tadka.Internal.SourceCode (SomeSource (..), SourceCode (..), someSource)
 import Tadka.Internal.Span
 import Tadka.Internal.TH
 import Tadka.Internal.Types

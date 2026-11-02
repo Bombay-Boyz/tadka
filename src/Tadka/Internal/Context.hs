@@ -30,7 +30,7 @@ import           Tadka.Internal.Ann   (Ann)
 import           Tadka.Internal.Span
                    (ResolvedSpan, Span, SpanError, StaleReason, resolveSpan,
                     spanErrorReason)
-import           Tadka.Internal.Types (NamedSource)
+import           Tadka.Internal.SourceCode (SomeSource, SourceCode, someSource)
 
 
 data LabelKind = Primary | Secondary
@@ -55,7 +55,7 @@ data LabelState
 
 
 data SourceGroup = SourceGroup
-  { sgSource :: NamedSource
+  { sgSource :: SomeSource
   , sgLabels :: NonEmpty (Labeled LabelState)
   }
   deriving (Show)
@@ -89,28 +89,29 @@ newtype ContextError = ContextError SpanError
 -- /every/ group resolves against its own group's source. Returns 'Left' for
 -- the first out-of-bounds span encountered in group-then-label order.
 mkContextMulti
-  :: NonEmpty (NamedSource, NonEmpty (Labeled Span))
+  :: SourceCode s
+  => NonEmpty (s, NonEmpty (Labeled Span))
   -> Either ContextError Context
 mkContextMulti groups = HasLabels <$> traverse resolveGroup groups
   where
-    resolveGroup :: (NamedSource, NonEmpty (Labeled Span)) -> Either ContextError SourceGroup
+    resolveGroup :: SourceCode s => (s, NonEmpty (Labeled Span)) -> Either ContextError SourceGroup
     resolveGroup (src, labels) =
       case traverse (resolveLabel src) labels of
         Left err   -> Left (ContextError err)
-        Right lbls -> Right (SourceGroup src lbls)
+        Right lbls -> Right (SourceGroup (someSource src) lbls)
 
-    resolveLabel :: NamedSource -> Labeled Span -> Either SpanError (Labeled LabelState)
+    resolveLabel :: SourceCode s => s -> Labeled Span -> Either SpanError (Labeled LabelState)
     resolveLabel src (Labeled sp k txt) =
       fmap (\rs -> Labeled (LabelOk rs) k txt) (resolveSpan src sp)
 
 
-mkContextMultiDegrading :: NonEmpty (NamedSource, NonEmpty (Labeled Span)) -> Context
+mkContextMultiDegrading :: SourceCode s => NonEmpty (s, NonEmpty (Labeled Span)) -> Context
 mkContextMultiDegrading = HasLabels . fmap resolveGroup
   where
-    resolveGroup :: (NamedSource, NonEmpty (Labeled Span)) -> SourceGroup
-    resolveGroup (src, labels) = SourceGroup src (fmap (resolveOrStale src) labels)
+    resolveGroup :: SourceCode s => (s, NonEmpty (Labeled Span)) -> SourceGroup
+    resolveGroup (src, labels) = SourceGroup (someSource src) (fmap (resolveOrStale src) labels)
 
-    resolveOrStale :: NamedSource -> Labeled Span -> Labeled LabelState
+    resolveOrStale :: SourceCode s => s -> Labeled Span -> Labeled LabelState
     resolveOrStale src (Labeled sp k txt) =
       case resolveSpan src sp of
         Right rs  -> Labeled (LabelOk rs) k txt
@@ -123,7 +124,7 @@ mkContextMultiDegrading = HasLabels . fmap resolveGroup
 --
 -- A one-group special case of 'mkContextMulti' — not a second copy of the
 -- resolution logic.
-mkContext :: NamedSource -> NonEmpty (Labeled Span) -> Either ContextError Context
+mkContext :: SourceCode s => s -> NonEmpty (Labeled Span) -> Either ContextError Context
 mkContext src labels = mkContextMulti ((src, labels) :| [])
 
 -- | Total construction: resolves every span it can; a span that fails becomes
@@ -133,14 +134,14 @@ mkContext src labels = mkContextMulti ((src, labels) :| [])
 --
 -- A one-group special case of 'mkContextMultiDegrading' — not a second copy
 -- of the degrading logic.
-mkContextDegrading :: NamedSource -> NonEmpty (Labeled Span) -> Context
+mkContextDegrading :: SourceCode s => s -> NonEmpty (Labeled Span) -> Context
 mkContextDegrading src labels = mkContextMultiDegrading ((src, labels) :| [])
 
 -- | The shared dispatch both the derive macro and manual instances call.
 -- An empty label list is the only route to 'NoContext'; a non-empty one goes
 -- straight to 'mkContextDegrading'. This is intentionally a thin wrapper, not a
 -- second copy of the degrading logic.
-buildContext :: NamedSource -> [(Span, Maybe (Doc Ann))] -> Context
+buildContext :: SourceCode s => s -> [(Span, Maybe (Doc Ann))] -> Context
 buildContext _   []       = NoContext
 buildContext src (x : xs) = mkContextDegrading src (fmap toLabeled (x :| xs))
   where
@@ -149,21 +150,21 @@ buildContext src (x : xs) = mkContextDegrading src (fmap toLabeled (x :| xs))
 -- | Like 'buildContext', but each label carries an explicit 'LabelKind'. The
 -- shared function both the derive macro (when secondary labels are requested)
 -- and manual instances call for primary\/secondary labelling.
-buildContextWith :: NamedSource -> [(Span, LabelKind, Maybe (Doc Ann))] -> Context
+buildContextWith :: SourceCode s => s -> [(Span, LabelKind, Maybe (Doc Ann))] -> Context
 buildContextWith _   []       = NoContext
 buildContextWith src (x : xs) = mkContextDegrading src (fmap toLabeled (x :| xs))
   where
     toLabeled (sp, k, txt) = Labeled sp k txt
 
 
-buildContextMulti :: NonEmpty (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))]) -> Context
+buildContextMulti :: SourceCode s => NonEmpty (s, [(Span, LabelKind, Maybe (Doc Ann))]) -> Context
 buildContextMulti groups =
   maybe NoContext mkContextMultiDegrading
     (NE.nonEmpty (concatMap nonEmptyGroup (NE.toList groups)))
   where
     nonEmptyGroup
-      :: (NamedSource, [(Span, LabelKind, Maybe (Doc Ann))])
-      -> [(NamedSource, NonEmpty (Labeled Span))]
+      :: (s, [(Span, LabelKind, Maybe (Doc Ann))])
+      -> [(s, NonEmpty (Labeled Span))]
     nonEmptyGroup (src, entries) =
       case NE.nonEmpty (map toLabeled entries) of
         Nothing  -> []
