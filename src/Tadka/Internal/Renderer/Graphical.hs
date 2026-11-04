@@ -235,52 +235,47 @@ renderRoot opts sd@(SomeDiagnostic e) =
   where
     glyphs   = glyphsFor (goUnicodeMode opts)
     cmode    = goColorMode opts
-    fuel     = goRelatedDepth opts
     gw       = gutterWidth (context e)
     eqIndent = T.replicate (gw + 1) " "
     header   = headerLine cmode (severity e) (code e) (docToStyledText cmode (message e))
     snip     = snippetLines glyphs (severity e) cmode (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) gw (context e)
     trailer  = helpSeeLines gw (fmap (docToStyledText cmode) (help e))
                  (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url e))
-                 ++ causeLinesFor opts fuel cmode glyphs eqIndent sd
-                 ++ relatedForest opts fuel glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
+                 ++ causeLinesFor opts (goCauseDetail opts) cmode glyphs eqIndent sd
+                 ++ relatedForest opts glyphs gw eqIndent (walkRelated (goRelatedDepth opts) sd)
     sep      = [T.replicate (gw + 1) " " <> gRail glyphs | not (null snip) && not (null trailer)]
 
 -- | The "= caused by: ..." lines for a diagnostic's own 'diagnosticCause'
--- chain, indented to the given column. Shared by 'renderRoot' and every
--- 'relatedChild' so a diagnostic's causes render identically regardless of
--- where in the report it appears.
+-- chain, indented to the given column, at the given level of detail.
 --
--- Under 'CauseSummary' (the default) each cause is one line: its code and
--- message. Under 'CauseFull' each cause also gets its own snippet, help\/see
--- lines and related forest, nested one level deeper per cause.
+-- 'CauseSummary' renders each cause as one line: its code and message.
+-- 'CauseFull' also gives each cause its own snippet, help\/see lines and
+-- related forest, nested one level deeper per cause.
 --
--- The @fuel@ argument is what makes 'CauseFull' terminate. Rendering a cause
--- in full can reach more related diagnostics, whose own causes are rendered
--- in full in turn, and a cyclic structure never repeats a 'diagnosticId'
--- within any single bounded walk. Every step into a cause's full rendering
--- therefore spends one unit of fuel, and at zero fuel a cause is rendered as
--- its summary line only. Fuel starts at the related-depth limit.
-causeLinesFor :: GraphicalOptions -> Natural -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
-causeLinesFor opts fuel cmode glyphs indent sd = case goCauseDetail opts of
-  CauseFull -> causeChain fuel indent chain
-  CauseSummary -> summaries indent chain
+-- Only the diagnostic being reported gets 'CauseFull' (see 'renderRoot').
+-- Every related diagnostic's causes, at any depth, are summaries
+-- ('relatedChild' passes 'CauseSummary'). That keeps the work bounded by
+-- construction: the cause chain is cut at the related-depth limit, each
+-- related forest is a depth-limited tree, and the two never feed each other.
+-- (Letting related diagnostics expand their causes in full, and those causes
+-- their related diagnostics, terminates only through a depth counter, and on a
+-- structure with no 'diagnosticId's to cut it short, such as a cycle, renders
+-- on the order of @limit ^ limit@ lines.)
+causeLinesFor :: GraphicalOptions -> CauseDetail -> ColorMode -> Glyphs -> Text -> SomeDiagnostic -> [Text]
+causeLinesFor opts detail cmode glyphs indent sd = case detail of
+  CauseFull    -> causeChain indent chain
+  CauseSummary -> [ indent <> "= caused by: " <> summaryOf cmode glyphs c | c <- chain ]
   where
     chain = walkCauses (goRelatedDepth opts) sd
 
     nest :: Text
     nest = "  "
 
-    summaries :: Text -> [SomeDiagnostic] -> [Text]
-    summaries ind cs = [ ind <> "= caused by: " <> summaryOf cmode glyphs c | c <- cs ]
-
-    causeChain :: Natural -> Text -> [SomeDiagnostic] -> [Text]
-    causeChain _ _ [] = []
-    causeChain f ind cs@(c@(SomeDiagnostic ce) : rest)
-      | f == 0    = summaries ind cs
-      | otherwise =
-          (ind <> "= caused by: " <> summaryOf cmode glyphs c)
-            : map (nest <>) (ownSnippet ++ ownHelpSee ++ ownSep ++ ownRelated ++ ownRest)
+    causeChain :: Text -> [SomeDiagnostic] -> [Text]
+    causeChain _ [] = []
+    causeChain ind (c@(SomeDiagnostic ce) : rest) =
+      (ind <> "= caused by: " <> summaryOf cmode glyphs c)
+        : map (nest <>) (ownSnippet ++ ownHelpSee ++ ownSep ++ ownRelated ++ ownRest)
       where
         ownGw      = gutterWidth (context ce)
         ownIndent  = T.replicate (ownGw + 1) " "
@@ -288,9 +283,9 @@ causeLinesFor opts fuel cmode glyphs indent sd = case goCauseDetail opts of
                        (goTabWidth opts) (goContextLines opts) ownGw (context ce)
         ownHelpSee = helpSeeLines ownGw (fmap (docToStyledText cmode) (help ce))
                        (fmap (\u -> hyperlink (goHyperlinkMode opts) u (unUrl u)) (url ce))
-        ownRelated = relatedForest opts (f - 1) glyphs ownGw ownIndent
+        ownRelated = relatedForest opts glyphs ownGw ownIndent
                        (walkRelated (goRelatedDepth opts) c)
-        ownRest    = causeChain (f - 1) ownIndent rest
+        ownRest    = causeChain ownIndent rest
         ownSep     = [ ownIndent <> gRail glyphs
                      | not (null ownSnippet) && not (null (ownHelpSee ++ ownRelated ++ ownRest)) ]
 
@@ -451,9 +446,9 @@ helpSeeLines gw mhelp murl =
 -- === Related nesting ======================================================
 
 -- Render the related section under a parent, given the parent's eq-line indent.
-relatedForest :: GraphicalOptions -> Natural -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
-relatedForest opts fuel glyphs _gw indent (RelatedTree parentDiag children term) =
-     concatMap (relatedChild opts fuel glyphs indent) children
+relatedForest :: GraphicalOptions -> Glyphs -> Int -> Text -> RelatedTree -> [Text]
+relatedForest opts glyphs _gw indent (RelatedTree parentDiag children term) =
+     concatMap (relatedChild opts glyphs indent) children
   ++ depthNote
   where
     depthNote = case term of
@@ -462,8 +457,8 @@ relatedForest opts fuel glyphs _gw indent (RelatedTree parentDiag children term)
                 <> " more related diagnostics omitted)"]
       _ -> []
 
-relatedChild :: GraphicalOptions -> Natural -> Glyphs -> Text -> RelatedTree -> [Text]
-relatedChild opts fuel glyphs indent node@(RelatedTree childDiag _ term) =
+relatedChild :: GraphicalOptions -> Glyphs -> Text -> RelatedTree -> [Text]
+relatedChild opts glyphs indent node@(RelatedTree childDiag _ term) =
   case term of
     CycleOmitted -> [indent <> "= related: (cycle omitted)"]
     _ ->
@@ -477,8 +472,8 @@ relatedChild opts fuel glyphs indent node@(RelatedTree childDiag _ term) =
       (\ce -> snippetLines glyphs (severity ce) (goColorMode opts) (goHighlighter opts) (goPalette opts) (goTabWidth opts) (goContextLines opts) childGw (context ce))
     -- Same call, same shape, as 'renderRoot': a related diagnostic's own
     -- "caused by" chain renders exactly as the root's would, just nested.
-    childCauses  = causeLinesFor opts fuel (goColorMode opts) glyphs childIndent childDiag
-    childRelated = relatedForest opts fuel glyphs childGw childIndent node
+    childCauses  = causeLinesFor opts CauseSummary (goColorMode opts) glyphs childIndent childDiag
+    childRelated = relatedForest opts glyphs childGw childIndent node
     childSep     = [childIndent <> gRail glyphs
                    | not (null childSnippet) && not (null (childCauses ++ childRelated))]
 

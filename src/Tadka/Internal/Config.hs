@@ -69,9 +69,10 @@ data HyperlinkMode = HyperlinkAuto | HyperlinkAlways | HyperlinkNever
 -- report. 'CauseSummary' is the historical, default behaviour (a single
 -- @"= caused by: ..."@ line per cause, carrying only its code and message);
 -- 'CauseFull' nests each cause's own snippet, help\/see lines, and related
--- forest, exactly the way a related diagnostic already renders — closing
--- the asymmetry a cause that is itself a rich 'Diagnostic' used to suffer
--- (its own spans and labels were simply dropped from the report).
+-- forest, so a cause that is itself a rich 'Diagnostic' keeps its own spans
+-- and labels in the report. It applies to the cause chain of the diagnostic
+-- being reported; the causes of its related diagnostics are always shown as
+-- summary lines, which bounds the size of the report.
 data CauseDetail = CauseSummary | CauseFull
   deriving (Eq, Show, Enum, Bounded)
 

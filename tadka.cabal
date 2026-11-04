@@ -160,10 +160,19 @@ test-suite props
                     MultiLine
                     EdgeCases
                     GenDiag
+                    Unicode
+                    HighlightSafety
+                    SourceLaws
+                    RenderUtil
+                    HighlightRender
+                    SourceRender
+                    CauseFull
+                    Bridge
   build-depends:    base                          >=4.18 && <4.23
                   , tadka
                   , text                          >=2.0  && <2.3
                   , aeson                         >=2.1  && <2.4
+                  , directory                     >=1.3  && <1.4
                   , prettyprinter                 >=1.7  && <1.8
                   , prettyprinter-ansi-terminal   >=1.1  && <1.2
                   , template-haskell              >=2.20 && <2.25
@@ -171,6 +180,27 @@ test-suite props
 
 -- One-directional interop adapters. Each is a separate sub-library so the core
 -- library never depends on a parser package; core modules cannot import these.
+-- Every example shown in the README and tutorial lives here as real code, so
+-- the documentation cannot drift from the API. `cabal test docs` checks them;
+-- `cabal run test:docs -- --print` prints the real output the docs quote.
+test-suite docs
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test/docs
+  main-is:          Main.hs
+  other-modules:    Example
+                    Examples.Quickstart
+                    Examples.Derive
+                    Examples.CustomSource
+                    Examples.AdHoc
+                    Examples.Highlight
+                    Examples.Formats
+  build-depends:    base                          >=4.18 && <4.23
+                  , tadka
+                  , text                          >=2.0  && <2.3
+                  , prettyprinter                 >=1.7  && <1.8
+                  , template-haskell              >=2.20 && <2.25
+
 library interop-ghc
   import:           warnings
   visibility:       public

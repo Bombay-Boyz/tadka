@@ -193,25 +193,19 @@ currentSchemaVersion = 1
 -- @cycleOmitted@ flag (not nested entries); depth-truncation becomes
 -- @truncated@ on the node whose children were cut. The same 'depth' budget
 -- used to build the 'related' tree also bounds each node's own 'causes'
--- chain — one recursive definition, applied uniformly to the root and to
--- every related diagnostic, so a node's causes never depend on whether it
--- happens to be the one the caller started from.
+-- chain. The root's causes use the configured 'CauseDetail'; every related
+-- diagnostic's causes are summaries, which keeps the output bounded (see
+-- 'causeDTO').
 toDTO :: CauseDetail -> Natural -> RelatedTree -> DiagnosticDTO
-toDTO cd depth = toDTOFuel cd depth depth
-
--- | 'toDTO' with an explicit @fuel@ bounding how many times full cause detail
--- may nest (each full cause spends one unit; see 'causeDTO'). It starts at the
--- related-depth limit, so a structurally cyclic diagnostic still terminates.
-toDTOFuel :: CauseDetail -> Natural -> Natural -> RelatedTree -> DiagnosticDTO
-toDTOFuel cd depth fuel (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
+toDTO cd depth (RelatedTree sd@(SomeDiagnostic e) children term) = DiagnosticDTO
   { dtoCode         = unDiagnosticCode <$> code e
   , dtoSeverity     = severityJsonTag (severity e)
   , dtoMessage      = docToText (message e)
   , dtoLabels       = labelsDTO (context e)
   , dtoHelp         = docToText <$> help e
   , dtoUrl          = unUrl <$> url e
-  , dtoRelated      = [ toDTOFuel cd depth fuel c | c <- children, not (isCycle c) ]
-  , dtoCauses       = map (causeDTO cd depth fuel) (walkCauses depth sd)
+  , dtoRelated      = [ toDTO CauseSummary depth c | c <- children, not (isCycle c) ]
+  , dtoCauses       = map (causeDTO cd depth) (walkCauses depth sd)
   , dtoTruncated    = term == DepthTruncated
   , dtoCycleOmitted = any isCycle children
   }
@@ -257,12 +251,12 @@ renderJson opts e = case toJSON (toDTO cd depth (walkRelated depth root)) of
 -- @causes@ is always empty: its successors are the entries after it in the
 -- owner's list, and nesting them again would repeat every later cause once per
 -- earlier one. A full entry still carries its own labels, help and related
--- diagnostics. At zero @fuel@ an entry degrades to the summary shape.
-causeDTO :: CauseDetail -> Natural -> Natural -> SomeDiagnostic -> CauseDTO
-causeDTO CauseFull depth fuel c
-  | fuel > 0 =
-      CauseDTOFull ((toDTOFuel CauseFull depth (fuel - 1) (walkRelated depth c)) { dtoCauses = [] })
-causeDTO _ _ _ (SomeDiagnostic e) =
+-- diagnostics, and those related diagnostics' causes are summaries (the same
+-- rule as the text renderers, and what keeps the output bounded).
+causeDTO :: CauseDetail -> Natural -> SomeDiagnostic -> CauseDTO
+causeDTO CauseFull depth c =
+  CauseDTOFull ((toDTO CauseSummary depth (walkRelated depth c)) { dtoCauses = [] })
+causeDTO CauseSummary _ (SomeDiagnostic e) =
   CauseDTOSummary (unDiagnosticCode <$> code e) (docToText (message e))
 
 -- Plain-text rendering of an annotated document (annotations discarded); JSON

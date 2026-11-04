@@ -87,10 +87,8 @@ renderProse opts sd@(SomeDiagnostic e) =
      headerSentence (severity e) (fmap unDiagnosticCode (code e)) (docToProse (message e))
    : contextSentences (context e)
   ++ helpSentences (fmap docToProse (help e)) (fmap unUrl (url e))
-  ++ causeSentences opts fuel (walkCauses (noRelatedDepth opts) sd)
-  ++ relatedSentences opts fuel (walkRelated (noRelatedDepth opts) sd)
-  where
-    fuel = noRelatedDepth opts
+  ++ causeSentences opts (noCauseDetail opts) (walkCauses (noRelatedDepth opts) sd)
+  ++ relatedSentences opts (walkRelated (noRelatedDepth opts) sd)
 
 -- === Header ===============================================================
 
@@ -160,20 +158,20 @@ helpSentences mhelp murl =
 
 -- === Related ==============================================================
 
-relatedSentences :: NarratableOptions -> Natural -> RelatedTree -> [Text]
-relatedSentences opts fuel (RelatedTree rootDiag children term) =
-     concatMap (relatedChild opts fuel) children
+relatedSentences :: NarratableOptions -> RelatedTree -> [Text]
+relatedSentences opts (RelatedTree rootDiag children term) =
+     concatMap (relatedChild opts) children
   ++ truncationNote term (numRelated rootDiag)
 
-relatedChild :: NarratableOptions -> Natural -> RelatedTree -> [Text]
-relatedChild opts fuel (RelatedTree childDiag kids term) = case term of
+relatedChild :: NarratableOptions -> RelatedTree -> [Text]
+relatedChild opts (RelatedTree childDiag kids term) = case term of
   CycleOmitted -> [ "A related diagnostic was omitted because it forms a cycle." ]
   _ ->
        ("Related: " <> summaryProse childDiag <> ".")
        -- Same call, same shape, as 'renderProse': a related diagnostic's own
        -- cause chain reads exactly as the root's would, just nested here.
-     : causeSentences opts fuel (walkCauses (noRelatedDepth opts) childDiag)
-    ++ concatMap (relatedChild opts fuel) kids
+     : causeSentences opts CauseSummary (walkCauses (noRelatedDepth opts) childDiag)
+    ++ concatMap (relatedChild opts) kids
     ++ truncationNote term (numRelated childDiag)
 
 truncationNote :: TerminationReason -> Int -> [Text]
@@ -185,21 +183,20 @@ plural :: Int -> Text
 plural 1 = " was"
 plural _ = "s were"
 
--- | Prose for a diagnostic's cause chain. Under 'CauseSummary' (the
--- default) each cause is one sentence: its code and message. Under
--- 'CauseFull' each cause also gets its own location\/source-line\/label
+-- | Prose for a diagnostic's cause chain, at the given level of detail.
+-- 'CauseSummary' gives each cause one sentence: its code and message.
+-- 'CauseFull' also gives each cause its own location\/source-line\/label
 -- sentences, help\/more-information sentences, and related-diagnostic
--- sentences — what 'renderProse' would say about it standalone — read right
+-- sentences (what 'renderProse' would say about it standalone), read right
 -- after its own "Caused by" sentence, before the next cause in the chain.
 --
--- @fuel@ bounds how deeply full cause detail may nest through related
--- diagnostics and their own causes (see the graphical renderer's
--- @causeLinesFor@ for the reasoning). Each full cause spends one unit; at
--- zero fuel a cause is a single summary sentence.
-causeSentences :: NarratableOptions -> Natural -> [SomeDiagnostic] -> [Text]
-causeSentences opts fuel cs = case noCauseDetail opts of
-  CauseFull | fuel > 0 -> concatMap fullCause cs
-  _                    -> map summary cs
+-- As in the graphical renderer, only the diagnostic being reported gets
+-- 'CauseFull'; the causes of related diagnostics are always summaries, which
+-- keeps the amount of prose bounded (see @causeLinesFor@ there).
+causeSentences :: NarratableOptions -> CauseDetail -> [SomeDiagnostic] -> [Text]
+causeSentences opts detail cs = case detail of
+  CauseFull    -> concatMap fullCause cs
+  CauseSummary -> map summary cs
   where
     summary c = "Caused by: " <> summaryProse c <> "."
 
@@ -207,7 +204,7 @@ causeSentences opts fuel cs = case noCauseDetail opts of
          summary c
        : contextSentences (context ce)
       ++ helpSentences (fmap docToProse (help ce)) (fmap unUrl (url ce))
-      ++ relatedSentences opts (fuel - 1) (walkRelated (noRelatedDepth opts) c)
+      ++ relatedSentences opts (walkRelated (noRelatedDepth opts) c)
 
 summaryProse :: SomeDiagnostic -> Text
 summaryProse (SomeDiagnostic e) = case code e of
