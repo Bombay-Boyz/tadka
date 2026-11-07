@@ -274,11 +274,16 @@ myConfig =
 | Clickable links | `withHyperlinkMode` | `HyperlinkNever` |
 | Related and cause depth | `withRelatedDepthLimit` | 8 |
 | Tab width | `withTabWidth` | 4 |
-| Context lines | `withContextLines` | unset |
+| Context lines | `withContextLines` | unset: the lines from the first to the last label |
 | Label colours | `withLabelPalette` | built-in |
 | Output format | `withTarget` | graphical |
 | Cause detail | `withCauseDetail` | `CauseSummary` |
 | Highlighting | `withHighlighter` | none |
+
+Without `withContextLines`, a snippet shows every line from the first labelled
+line to the last (a range of more than 100 lines falls back to two lines of
+context). With `withContextLines n` it shows `n` lines of context around each
+labelled line and elides the gaps between them.
 
 `reportDiagnostic` prints to standard output; `reportDiagnosticTo` prints to any
 `Handle`; `renderDiagnosticTo` returns the report as `Text`. Colour and Unicode
@@ -322,7 +327,31 @@ instance Diagnostic Clash where
       :| [Labeled first Secondary (Just "first defined here")])
 ```
 
-Run `cabal run test:docs -- --print` to see the report each of these examples produces.
+The derived version prints:
+
+<!-- output: labels-derive -->
+```text
+error: `x` shadows an earlier binding
+  ┌─ demo.hs:2:5
+  │
+1 │ let x = 1
+  │     - previous binding was here
+2 │ let x = 2
+  │     ^ new binding here
+```
+
+and the hand-written one:
+
+<!-- output: labels-manual -->
+```text
+error: conflicting definitions
+  ┌─ demo.hs:2:1
+  │
+1 │ x = 1
+  │ - first defined here
+2 │ x = 2
+  │ ^ redefined here
+```
 
 ## 8. A variable number of labels
 
@@ -347,11 +376,24 @@ deriveDiagnostic defaultSpec
   ''MultipleDefinitions
 ```
 
+With two prior definitions, the report is:
+
+<!-- output: labels-collection -->
+```text
+error: `x` is defined more than once
+  ┌─ demo.hs:3:1
+  │
+1 │ x = 1
+  │ - also defined here
+2 │ x = 2
+  │ ~ also defined here
+3 │ x = 3
+  │ ^ latest definition
+```
+
 An empty list contributes no labels. To give each element its own text, use
 `specSecondaryLabelCollectionFieldsWith` (or the primary variant) with an
 `e -> [(Span, Text)]` expression.
-
-Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
 ## 9. Causes and related diagnostics
 
@@ -390,6 +432,19 @@ deriveDiagnostic defaultSpec
   ''ConfigError
 ```
 
+With the default configuration the cause is one line:
+
+<!-- output: cause-summary -->
+```text
+error: failed to resolve import
+  ┌─ Main.hs:1:8
+  │
+1 │ import Data.Mapp
+  │        ^^^^^^^^^ this import
+  │
+  = caused by: unknown module path
+```
+
 A diagnostic can also collect others as related diagnostics:
 
 ```haskell
@@ -401,9 +456,24 @@ instance Diagnostic BuildFailed where
   related (BuildFailed ds) = ds
 ```
 
-By default a cause is one line, its code and message. To show each cause of the
-reported diagnostic as a full nested report, with its own snippet, help, and
-related diagnostics:
+Here the related diagnostics are shown one after another; the first one's cause
+is a one-line summary, as for any related diagnostic:
+
+<!-- output: related -->
+```text
+error: build failed with 2 errors
+  = related: failed to resolve import
+    ┌─ Main.hs:1:8
+    │
+  1 │ import Data.Mapp
+    │        ^^^^^^^^^ this import
+    │
+    = caused by: unknown module path
+  = related: disk full
+```
+
+To show each cause of the reported diagnostic as a full nested report, with its
+own snippet, help, and related diagnostics:
 
 ```haskell
 -- | The default shows each cause as one line; 'CauseFull' nests its report.
@@ -411,13 +481,28 @@ fullCauses :: Config
 fullCauses = withCauseDetail CauseFull plainConfig
 ```
 
+The cause now brings its own source and label:
+
+<!-- output: cause-full -->
+```text
+error: failed to resolve import
+  ┌─ Main.hs:1:8
+  │
+1 │ import Data.Mapp
+  │        ^^^^^^^^^ this import
+  │
+  = caused by: unknown module path
+    ┌─ modules.cfg:1:11
+    │
+  1 │ unknown = Data.Mapp
+    │           ^^^^^^^^^ no such module
+```
+
 Rendering is bounded however the diagnostics are connected. Cause chains and
 related trees stop at the related-depth limit, and a `diagnosticId` stops a
 diagnostic from being rendered twice. Only the reported diagnostic's own causes
 are expanded by `CauseFull`; the causes of related diagnostics are always
 one-line summaries, so even a cyclic structure produces a small report.
-
-Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
 ## 10. Several files
 
@@ -447,7 +532,19 @@ span does not fit. `mkContextMultiDegrading` always returns a `Context` and mark
 a misfit label stale. The derive macros and `genericContext` work with a single
 source.
 
-Run `cabal run test:docs -- --print` to see the report each of these examples produces.
+<!-- output: multi-file -->
+```text
+error: these declarations disagree
+  ┌─ A.hs:1:1
+  │
+1 │ value = 42
+  │ ^^^^^ defined here
+  │
+  ┌─ B.hs:1:7
+  │
+1 │ use = value + 1
+  │       ^^^^^ used here
+```
 
 ## 11. A family of errors from one sum type
 
@@ -497,7 +594,28 @@ deriveDiagnosticSum
   ''CompileError
 ```
 
-Run `cabal run test:docs -- --print` to see the report each of these examples produces.
+The two constructors print:
+
+<!-- output: family-error -->
+```text
+error: unexpected token
+  ┌─ Main.hs:1:5
+  │
+1 │ x = foo
+  │     ^^^ here
+```
+
+<!-- output: family-warning -->
+```text
+warning: type mismatch, expected Int
+  ┌─ Main.hs:1:5
+  │
+1 │ y = 'c'
+  │     ^^^ here
+```
+
+The second one is a warning because its `DiagnosticSpec` sets `specSeverity` to
+`SevWarning`.
 
 ## 12. Your own source representation
 

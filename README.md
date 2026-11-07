@@ -10,8 +10,6 @@ other developer tooling. It is inspired by Rust's
 [`miette`](https://github.com/zkat/miette) and built around Haskell's types and
 conventions.
 
-![Tadka graphical diagnostic](https://raw.githubusercontent.com/Bombay-Boyz/tadka/main/assets/tadka-diagnostic.png)
-
 Tadka adds a reporting layer to the error types you already have. It does not
 replace `Either`, `ExceptT`, or exceptions: add a `Diagnostic` instance to say
 how an error should be presented, and keep propagating it however you like.
@@ -220,11 +218,16 @@ Start from `defaultConfig` and apply `with...` functions.
 | Clickable links | `withHyperlinkMode` | `HyperlinkNever`: terminals give no reliable way to ask |
 | Related and cause depth | `withRelatedDepthLimit` | 8 |
 | Tab width | `withTabWidth` | 4 |
-| Context lines | `withContextLines` | unset: show the contiguous range |
+| Context lines | `withContextLines` | unset: the lines from the first to the last label |
 | Label colours | `withLabelPalette` | built-in palette |
 | Output format | `withTarget` | graphical |
 | Cause detail | `withCauseDetail` (`CauseSummary`, `CauseFull`) | `CauseSummary`: one line per cause |
 | Syntax highlighting | `withHighlighter`, `withoutHighlighter` | none |
+
+Without `withContextLines`, a snippet shows every line from the first labelled
+line to the last (a range of more than 100 lines falls back to two lines of
+context). With `withContextLines n` it shows `n` lines of context around each
+labelled line and elides the gaps between them.
 
 `reportDiagnostic` prints to standard output. `reportDiagnosticTo` prints to any
 `Handle`, such as `stderr`, and `renderDiagnosticTo` returns the report as
