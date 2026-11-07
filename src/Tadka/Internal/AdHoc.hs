@@ -86,11 +86,6 @@ adHoc msg = AdHocDiagnostic
 wrapErr :: Diagnostic e => Text -> e -> AdHocDiagnostic
 wrapErr msg e = (adHoc msg) { adHocCause = Just (SomeDiagnostic e) }
 
--- | Lift any 'Show'-only error into a minimal 'Diagnostic' — the direct
--- analogue of miette's blanket @IntoDiagnostic@ for @std::error::Error@.
--- Deliberately asks for nothing but 'Show': that is exactly the bar
--- @std::error::Error@ itself sets (a @Display@ impl), so this is the direct
--- Haskell analogue, not a weaker substitute for it.
 -- | Turn any value with a 'Show' instance into an ad hoc diagnostic whose
 -- message is its 'show' output. 'show' is a debugging format, not a message:
 -- a 'String' or 'Text' comes out quoted and escaped. Prefer 'fromError' for

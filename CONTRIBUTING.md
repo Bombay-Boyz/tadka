@@ -16,13 +16,15 @@ Thanks for taking a look. This is a small, one-person project — bug reports, d
   make test
   ```
   
-  There are three independently-runnable test suites — `golden`, `props`, and `interop` (round-trip checks for the megaparsec/attoparsec/GHC `SrcSpan` adapters) — so `cabal test golden`, `cabal test props`, or `cabal test interop` work fine on their own if you're only touching one area.
+  There are several independently-runnable test suites — `golden` (exact renderer output), `props` (property tests), `interop` (round-trip checks for the megaparsec/attoparsec/GHC `SrcSpan` adapters), `docs` and `hello` (the examples in the README and tutorial, and a check that the documentation matches them), and, in `tadka-highlight`, `smoke` — so `cabal test golden`, `cabal test props`, and so on work fine on their own if you're only touching one area.
+
+  **Documentation is tested.** Every Haskell block in `README.md` and `TADKA-TUTORIAL.md` must be a verbatim excerpt of a compiled example, and every block of program output must equal what its example prints. To add an example, add it under `test/docs/Examples`, list it in `test/docs/Main.hs`, and quote it in the docs; `cabal run test:docs -- --print` shows the real output to quote. The documents cannot contain code that does not compile.
   
   ## Two rules that actually matter
   
   Nothing else here is checked by the compiler, so it's worth knowing these before you dig in:
   
-  **Renderers are built one way.** Every `GraphicalOptions` / `NarratableOptions` / `JsonOptions` value comes from `selectRenderer`, and every `Aeson.Value` for a diagnostic comes from the JSON handler's own DTO conversion. If a change seems to need a second way to build one of these, that's usually a sign to adjust `selectRenderer` (or the DTO conversion) rather than add a parallel path.
+  **Renderers are built one way.** Every `GraphicalOptions` / `NarratableOptions` / `JsonOptions` value is built by that renderer's own function (`graphicalOptions`, `narratableOptions`, `jsonOptions`) from a `Config`, via `selectRenderer`, and every `Aeson.Value` for a diagnostic comes from the JSON handler's own DTO conversion. If a change seems to need a second way to build one of these, that's usually a sign to adjust the one function (or the DTO conversion) rather than add a parallel path. A new setting is added to `Config`, to its `with...` function, and to that one construction function.
   
   **Generated code stays thin.** Every method body `deriveDiagnostic` produces has to be a plain call to an ordinary, exported `Tadka.Internal` function — the same one a hand-written instance could call. If a field needs logic the current surface can't express as a plain call, add that as a new function first, then have the macro call it. A CI check enforces this automatically.
   

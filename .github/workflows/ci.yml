@@ -36,6 +36,15 @@ jobs:
       - name: Property tests
         run: cabal test props --test-show-details=direct
 
+      # Every example in the README and tutorial is built and run, and the
+      # documents are checked against them.
+      - name: Documentation tests
+        run: cabal test docs hello --test-show-details=direct
+
+      # The optional, GPL-licensed highlighter package (separate from tadka).
+      - name: Highlighter smoke test
+        run: cabal test smoke --test-show-details=direct
+
       # Interop adapters live in separate sub-libraries so the core never
       # depends on a parser package; their round-trip tests run here.
       - name: Interop tests

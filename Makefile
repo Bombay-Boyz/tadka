@@ -1,12 +1,14 @@
-# Convenience targets. Each test suite is independently runnable, per the
-# Phase 0 exit criteria and the cross-phase note "testing is not deferred."
+# Convenience targets. Each test suite is independently runnable.
 
-.PHONY: build test test-golden test-props test-interop check-generated check-compile-fail clean gen-width-table
+HS_SOURCES := $(shell git ls-files '*.hs')
+
+
+.PHONY: build test test-golden test-props test-interop test-docs check-generated check-compile-fail clean gen-width-table
 
 build:
 	cabal build all
 
-test: test-golden test-props test-interop check-generated check-compile-fail
+test: test-golden test-props test-interop test-docs check-generated check-compile-fail
 
 # Requires ormolu on PATH (`cabal install ormolu` or `ghcup install ormolu`).
 # `format` rewrites files in place; `format-check` (used in CI) fails without
@@ -23,19 +25,23 @@ test-golden:
 test-props:
 	cabal test props --test-show-details=direct
 
+# The examples in the README and tutorial, and the check that the documents match them.
+test-docs:
+	cabal test docs hello --test-show-details=direct
+
 # Interop round-trip tests (megaparsec / attoparsec / GHC SrcSpan adapters).
 test-interop:
 	cabal test interop --test-show-details=direct
 
-# Phase 8 discipline: generated method bodies must be direct calls (vision §6).
+# Generated method bodies must be direct calls to shared functions.
 check-generated:
 	sh tools/check-generated.sh
 
-# Phase 8: each malformed deriveDiagnostic use must fail at compile time.
+# Each malformed deriveDiagnostic use must fail at compile time.
 check-compile-fail:
 	sh tools/check-compile-fail.sh
 
-# Scaffold in Phase 0; implemented in Phase 1.
+# Regenerate the Unicode width tables.
 gen-width-table:
 	runghc tools/gen-width-table.hs
 

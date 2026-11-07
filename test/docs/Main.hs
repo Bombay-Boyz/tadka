@@ -16,23 +16,33 @@ import           System.Environment  (getArgs)
 import           System.Exit         (exitFailure)
 import           System.IO           (hSetEncoding, stdout)
 
+import           DocCheck            (checkDocs)
 import           Example
 import qualified Examples.AdHoc
+import qualified Examples.Chain
+import qualified Examples.Configure
 import qualified Examples.CustomSource
 import qualified Examples.Derive
+import qualified Examples.Family
 import qualified Examples.Formats
 import qualified Examples.Highlight
+import qualified Examples.Labels
+import qualified Examples.MultiFile
 import qualified Examples.Quickstart
 
 examples :: [Example]
 examples =
-  [ Examples.Quickstart.example
-  , Examples.Derive.example
-  , Examples.CustomSource.example
-  , Examples.AdHoc.example
-  , Examples.Highlight.example
-  , Examples.Formats.example
-  ]
+  [ Examples.Quickstart.example ]
+  ++ [ Examples.Derive.example ]
+  ++ Examples.Labels.examples
+  ++ Examples.Chain.examples
+  ++ [ Examples.MultiFile.example ]
+  ++ Examples.Family.examples
+  ++ [ Examples.CustomSource.example ]
+  ++ [ Examples.AdHoc.example ]
+  ++ [ Examples.Highlight.example ]
+  ++ Examples.Formats.examples
+  ++ [ Examples.Configure.example ]
 
 main :: IO ()
 main = do
@@ -48,12 +58,13 @@ main = do
       putStrLn ""
 
     check = do
-      results <- mapM checkOne examples
-      unless (and results) exitFailure
-      putStrLn "all documented examples produce their documented output"
+      outputs <- mapM (\ex -> (,) ex <$> exRun ex) examples
+      results <- mapM checkOne outputs
+      docsOk  <- checkDocs outputs
+      unless (and results && docsOk) exitFailure
+      putStrLn "every example runs, and the documentation matches them"
 
-    checkOne ex = do
-      out <- exRun ex
+    checkOne (ex, out) = do
       let missing = [ frag | frag <- exMustContain ex, not (frag `T.isInfixOf` out) ]
       if null missing
         then putStrLn ("ok   " ++ exName ex) >> pure True

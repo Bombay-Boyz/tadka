@@ -2,150 +2,89 @@
 
 All notable changes are recorded here. 
 
-## 2.1.0.0 — gold-standard review response
+## 2.1.0.0
 
-A response to an external line-by-line review against `miette`. Purely
-additive: no existing export, `Config` default, or JSON/golden shape changes.
-Process/ecosystem-maturity concerns from the same review (single maintainer,
-adoption, benchmarks) are explicitly out of scope for this release — code
-changes only.
+This release changes the licence, adds several features, fixes several bugs,
+and makes a few breaking API changes. The breaking changes are listed first.
 
-**Verification note.** This release could not be compiled or test-run in the
-environment it was produced in (GHC/cabal installation failed on sandbox disk
-quota, unrelated to `tadka` itself). Every change below was grounded by
-reading the actual surrounding source and, for the one new third-party
-dependency (`skylighting`), its real Hackage API — but run `cabal build` and
-`cabal test` before trusting this release the way the rest of the test matrix
-is normally trusted.
+### Breaking changes
 
-### Exception propagation (review §2/§8.1)
-- New `Tadka.Internal.Exception` (re-exported from `Tadka`): `DiagnosticException`
-  wraps any `Diagnostic` as an ordinary `Control.Exception.Exception`;
-  `throwDiagnostic`/`catchDiagnostic` are the `throwIO`/`catch` entry points;
-  `diagnosticShow` is the plain, deterministic (narratable-renderer-backed)
-  `Show` a caller's own `Exception` instance can delegate to instead of
-  wrapping; `installPanicHook` installs the configured renderer as GHC's
-  top-level uncaught-exception printer, via `GHC.Conc.setUncaughtExceptionHandler`
-  (stable since base-4.17/GHC 9.4, well within this package's floor),
-  falling back to whatever handler was previously installed for any other
-  exception type. `Diagnostic` itself is unchanged — no `Exception`
-  superclass, no `Show` requirement — this is an opt-in bridge alongside the
-  existing `Either`/`ExceptT` story, not a replacement for it.
-- New `Tadka.Internal.AdHoc` (re-exported from `Tadka`): `AdHocDiagnostic`, an
-  opaque minimal `Diagnostic` with nothing but a message, built via `adHoc`
-  (plain text, miette's `miette!(...)`), `wrapErr` (attach an existing
-  diagnostic as this one's cause, miette's `wrap_err`), `intoDiagnostic`
-  (lift any `Show`-only error, miette's blanket `IntoDiagnostic`), or
-  `fromSomeException` (lift a caught `SomeException` via its
-  `displayException`, not bare `show`). `withSourceCode` attaches source to an
-  otherwise-sourceless `AdHocDiagnostic` after the fact (miette's
-  `with_source_code()`), resolving spans via the existing degrading discipline.
+- **Licence:** `tadka` is now released under the **MIT** licence (it was
+  MPL-2.0). Earlier releases remain under the licence they were published with.
+- **Syntax highlighting moved out of the core.** `tadka` no longer depends on
+  `skylighting`, which is GPL-2. `HighlightMode`, `withHighlightMode`, and the
+  `Tadka.Internal.Highlight` tokenizer functions are replaced by a `Highlighter`
+  value and `withHighlighter` / `withoutHighlighter`. A skylighting-backed
+  highlighter is in the new, separate `tadka-highlight` package (GPL-2.0-only).
+- **`SourceCode` is now a complete extension point.** The class gained
+  `scLength` and `scLocate`. `Context` stores its sources as `SomeSource`
+  (`sgSource :: SomeSource`), and `resolveSpan`, `mkContext` and the other
+  context builders accept any `SourceCode`. Code that only uses `NamedSource`
+  compiles unchanged. `LineCol` moved to `Tadka.Internal.Types` (still exported
+  from `Tadka`).
+- **JSON output gained a `schemaVersion` key** on the root object (currently
+  `1`). Consumers that read keys by name are unaffected.
+- **`CauseFull` applies to the reported diagnostic's own cause chain.** The
+  causes of related diagnostics are always one-line summaries, at any depth.
+  This is also what the default `CauseSummary` already did.
+- **Internal option records.** `GraphicalOptions`, `NarratableOptions`, and
+  `JsonOptions` are built in one place each (`graphicalOptions`,
+  `narratableOptions`, `jsonOptions`) from a `Config`. They are abstract in
+  `Tadka`; only code importing `Tadka.Internal.*` can notice.
 
-### Grapheme-cluster-aware width (review §4, first bullet)
-- `Tadka.Internal.Width`'s `textWidth`/`displayColumnAt`/`expandTabs` now
-  segment text into UAX #29 extended grapheme clusters (new `graphemeClusters`/
-  `clusterWidth`, built from the module's own existing `GBProp`/
-  `isExtendedPictographic` table — no new Unicode data) before measuring,
-  instead of summing `charWidth` per code point. This was previously tested in
-  isolation but never wired into the functions that actually drive caret
-  placement — a decomposed Hangul syllable or a ZWJ emoji sequence was
-  measured per code point, not per rendered character. A single-code-point
-  cluster (everything without combining marks, ZWJ sequences, or decomposed
-  Hangul jamo — the overwhelming majority of real source text) is completely
-  unaffected; existing property-test assertions over such text hold unchanged.
+### Added
 
-### `SourceCode` is now public (review §4, second bullet)
-- `Tadka.Internal.SourceCode`'s `SourceCode` class is re-exported from `Tadka`.
-  Downstream code can now write a second instance (a rope buffer, an LSP
-  virtual document, a streamed huge file) without reaching into
-  `Tadka.Internal`.
+- **Exception bridge** (`Tadka.Internal.Exception`, exported from `Tadka`):
+  `DiagnosticException`, `throwDiagnostic`, `catchDiagnostic`,
+  `diagnosticShow`, and `installPanicHook`, which prints an uncaught
+  diagnostic as a full report on standard error.
+- **Ad hoc diagnostics:** `adHoc`, `wrapErr`, `fromError`, `fromSomeException`,
+  `intoDiagnostic`, `withSourceCode`, and the setters `withCode`,
+  `withSeverity`, `withHelp`, `withUrl`.
+- **`CauseDetail` and `withCauseDetail`:** `CauseSummary` (the default) or
+  `CauseFull`, which renders each cause of the reported diagnostic with its own
+  snippet, help, and related diagnostics, in all three renderers.
+- **`Highlighter`, `withHighlighter`, `withoutHighlighter`,** and the
+  `tadka-highlight` package with `skylightingAuto`, `skylightingLanguage`, and
+  `skylightingWith`.
+- **`reportDiagnosticTo` and `renderDiagnosticTo`:** report to any `Handle`, or
+  get the report as `Text`. Colour and Unicode are detected for that handle.
+- **Derive macros:** `diagnosticSpec` with the `diag*` builders, a flat
+  alternative to a record update on `defaultSpec`; `specLabelCollectionFieldsWith`
+  and `specSecondaryLabelCollectionFieldsWith` for per-element label text; source
+  fields of type `SomeSource` as well as `NamedSource`.
+- **JSON:** `schemaVersion`, and `FromJSON` instances for the DTO types.
+- **A tested documentation suite:** the `docs`, `hello`, and `smoke` test-suites
+  build and run every example and check the README and the tutorial against them.
 
-### Configurable cause-chain detail (review §5/§8.4)
-- New `CauseDetail` (`CauseSummary`, the existing default, or `CauseFull`) and
-  `withCauseDetail` on `Config`. Under `CauseFull`, a diagnostic's own
-  `diagnosticCause` chain renders as a fully nested report — its own snippet,
-  help/see lines, and related forest — on all three handlers, the same way a
-  `related` diagnostic already does, instead of always collapsing to a
-  code+message summary line. `CauseSummary` output is byte-identical to
-  before; this closes the asymmetry between `related` and `diagnosticCause`
-  the review flagged as hardcoded and inconsistent.
+### Fixed
 
-### Derive macro ergonomics (review §3/§8.5)
-- New `diagnosticSpec`/`diag*` combinators (`SpecEntry`, `diagCode`,
-  `diagSeverity`, `diagHelp`, `diagUrl`, `diagSource`, `diagLabel`,
-  `diagSecondaryLabel`, `diagLabelCollection`, `diagSecondaryLabelCollection`,
-  `diagLabelCollectionWith`, `diagSecondaryLabelCollectionWith`, `diagRelated`,
-  `diagCause`, `diagId`, `diagMessage`), a flatter, declarative alternative to
-  a `defaultSpec { ... }` record update — a plain, ordinarily-typechecked
-  builder, not a custom parser. The review suggested (as one option) a
-  `QuasiQuoter` reading closer to miette's `#[diagnostic(...)]` attribute
-  block; that was deliberately not attempted here, since a hand-written TH
-  parser had no compiler available in this environment to check it against,
-  and the risk of a subtly wrong parser was judged strictly higher than this
-  combinator-based alternative, which is just ordinary declarations over the
-  same `DiagnosticSpec`. `diagnosticSpec [...]` and `defaultSpec { ... }`
-  remain fully interchangeable.
-- New `specLabelCollectionFieldsWith`/`specSecondaryLabelCollectionFieldsWith`
-  on `DiagnosticSpec`: the per-element-text counterpart of
-  `specLabelCollectionFields`, taking an `e -> [(Span, Text)]` expression that
-  pairs each span with its own text, instead of every element of the
-  collection sharing one literal. `contextMethod`/`contextMethodArm` were
-  generalised (not duplicated) to merge these in alongside the existing fixed
-  and literal-collection label chunks; a spec using none of the new fields
-  generates byte-identical code to before.
+- **Display width of Unicode text.** Width is measured per grapheme cluster. Two
+  defects found in review are fixed: symbols such as (c), (R), TM, stars and
+  dingbats are one column again (they had been widened because they are
+  Extended_Pictographic), and a flag (two regional indicators) is two columns.
+  ZWJ sequences, variation selectors, skin-tone modifiers, keycaps, and
+  decomposed Hangul syllables are measured as one character. ASCII and Latin-1
+  text takes a fast path.
+- **Highlighting could bypass control-character sanitising**, letting an escape
+  sequence in a source file reach the terminal. A highlighter's output is now
+  accepted only if it equals the plain line plus colour codes.
+- **Uncaught diagnostics were written to standard output.** They go to standard
+  error.
+- **Writing to a handle with a non-Unicode encoding** (for example under a C
+  locale) raised an exception on any non-ASCII character. Such a handle now gets
+  ASCII drawing and `?` for characters it cannot encode.
+- **JSON under `CauseFull`** repeated every later cause inside each earlier one.
+  The cause list is flat.
+- **Builds on GHC 9.6 and 9.8** failed because of an unimported `foldl'`.
+- **Pathological structures** in which `CauseFull` and related diagnostics refer
+  to each other can no longer produce an unbounded report.
 
-### Syntax highlighting (review §6, first bullet)
-- New `Tadka.Internal.Highlight`, backed by the `skylighting` package (the
-  same tokenizer/syntax library Pandoc uses): `resolveSyntax` picks a
-  `Syntax` from the configured `HighlightMode` and a source's own name,
-  `tokenizeNamedSource` tokenizes a whole source once (so multi-line syntax
-  context — block comments, triple-quoted strings — carries correctly onto a
-  continuation line), and `highlightLine` ANSI-colourises one already
-  tab-expanded display line, falling back to the plain text on any tokenizer
-  failure or unrecognised source name. New `HighlightMode`
-  (`HighlightOff`/`HighlightAuto`/`HighlightLanguage`) and `withHighlightMode`
-  on `Config`, default `HighlightOff`: every existing golden fixture is
-  unaffected unless a caller opts in. Highlighting is always suppressed under
-  `ColorNever`, since a colourised token stream has no plain-text form to
-  degrade to.
+### Housekeeping
 
-### Panic hook (review §6, second bullet)
-- `installPanicHook` (`Tadka.Internal.Exception`, above) is the direct
-  analogue of miette's `set_panic_hook` — this was previously impossible
-  without an `Exception` instance to hook into at all.
-
-### JSON schema stability + `FromJSON` (review §6, third bullet)
-- New `currentSchemaVersion` (the DTO shape's own version, independent of the
-  package version — bumped only when `DiagnosticDTO`/`LabelDTO`/`CauseDTO`'s
-  shape changes in a way a consumer must handle), merged into the root
-  object's `"schemaVersion"` key by `renderJson`. Purely additive: every key a
-  consumer already reads off the root is untouched, and the key is never
-  added to a nested `related`/`CauseDTOFull` entry.
-- New `FromJSON` instances for `LabelDTO`, `DiagnosticDTO`, and `CauseDTO`
-  (the last tries the full-report shape first, falling back to the summary
-  shape, so a value this module encodes always decodes back to the same
-  constructor), gracefully ignoring the extra `"schemaVersion"` key on decode.
-  `ToJSON`-only was a deliberate v2 decision the review flagged as blocking
-  tooling interop; decoding is now available for a consumer that wants it.
-
-### `Handle`/`Text` output convenience (review §6, fourth bullet)
-- New `reportDiagnosticTo :: Handle -> Config -> e -> IO ()` and
-  `renderDiagnosticTo :: Handle -> Config -> e -> IO Text`
-  (`Tadka.Internal.Render`, re-exported from `Tadka`). `reportDiagnostic` is
-  now a thin specialisation of `reportDiagnosticTo stdout`. Terminal
-  capabilities are detected against the same handle being written to, so
-  `ColorAuto` etc. means "does the destination I'm about to write to look
-  like a terminal," not "does stdout, regardless of where this is headed" —
-  this was previously impossible without dropping to `render`/`selectRenderer`
-  directly to reach `stderr`, a log sink, or get back the rendered `Text`.
-
-### Hyperlink default documented (review §6, fifth bullet)
-- README's Rendering section now states `withHyperlinkMode`'s default
-  (`HyperlinkNever`, unlike colour/Unicode's `*Auto`) and why, alongside new
-  documentation of `withCauseDetail`/`withHighlightMode` and the
-  `diagnosticSpec` builder; the "Current scope" exclusions list no longer
-  claims no syntax-highlighting support exists at all, now that an optional,
-  `skylighting`-backed path does.
+- A `Makefile` target that formatted nothing (`HS_SOURCES` was undefined) now
+  works, a stale generated `sdist-contents.txt` was removed, and CI builds and
+  tests `tadka-highlight` and the documentation suites.
 
 ## 2.0.0.0 — miette-parity hardening
 

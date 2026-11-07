@@ -14,7 +14,7 @@ description:
   support for reducing diagnostic boilerplate. It is inspired by Rust's miette
   but is designed around Haskell's types and conventions.
 category:           Development, Error Handling
-license: MPL-2.0
+license:            MIT
 license-file:       LICENSE
 author:             Sabrinathan Nair
 maintainer:         259497327+Bombay-Boyz@users.noreply.github.com
@@ -25,8 +25,14 @@ build-type:         Simple
 tested-with:        GHC ==9.6.7, GHC ==9.8.4, GHC ==9.10.3, GHC ==9.12.4, GHC ==9.14.1
 extra-doc-files:    CHANGELOG.md
                     README.md
+                    TADKA-TUTORIAL.md
+                    CONTRIBUTING.md
                     assets/tadka-diagnostic.png
+-- The `docs` test-suite reads these at run time (it checks the README and the
+-- tutorial against the compiled examples), so a source distribution needs them.
 extra-source-files: test/golden/fixtures/*.txt
+                    tadka-highlight/README.md
+                    tadka-highlight/test/Smoke.hs
 
 -- Treat warnings as errors during development and CI, but not in released
 -- builds: new GHC versions add warnings that would otherwise break downstream
@@ -188,18 +194,36 @@ test-suite docs
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test/docs
   main-is:          Main.hs
-  other-modules:    Example
+  other-modules:    DocCheck
+                    Example
                     Examples.Quickstart
                     Examples.Derive
+                    Examples.Labels
+                    Examples.Chain
+                    Examples.MultiFile
+                    Examples.Family
                     Examples.CustomSource
                     Examples.AdHoc
                     Examples.Highlight
                     Examples.Formats
+                    Examples.Configure
   build-depends:    base                          >=4.18 && <4.23
                   , tadka
                   , text                          >=2.0  && <2.3
                   , prettyprinter                 >=1.7  && <1.8
                   , template-haskell              >=2.20 && <2.25
+
+-- The complete program shown in the README's quick start, built and run, so
+-- that it cannot stop compiling without the test suite noticing.
+test-suite hello
+  import:           warnings
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test/hello
+  main-is:          Main.hs
+  build-depends:    base                          >=4.18 && <4.23
+                  , tadka
+                  , text                          >=2.0  && <2.3
+                  , prettyprinter                 >=1.7  && <1.8
 
 library interop-ghc
   import:           warnings

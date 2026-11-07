@@ -1,416 +1,449 @@
 # Tadka
 
-**Tadka** is a Haskell library for structured error diagnostics and source-span reporting.
+**Tadka** turns ordinary error values into readable diagnostic reports: source
+snippets with labelled spans, error codes, help text, related diagnostics, and
+underlying causes. The same diagnostic can be shown as a graphical terminal
+report, as accessible prose, or as JSON.
 
-It turns ordinary error values into useful diagnostic reports with source
-locations, labeled spans, error codes, help text, related diagnostics, and
-underlying causes.
-
-The same diagnostic can be rendered as graphical terminal output, accessible
-prose, or JSON.
-
-`tadka` is useful for compilers, parsers, command-line tools, static
-analyzers, DSLs, and other developer tooling.
-
-It is inspired by Rust's [`miette`](https://github.com/zkat/miette), but is
-designed around Haskell's types and conventions.
-
-A snapshot of the error produced by tadka is as under:
-
+It is for compilers, parsers, command-line tools, static analysers, DSLs, and
+other developer tooling. It is inspired by Rust's
+[`miette`](https://github.com/zkat/miette) and built around Haskell's types and
+conventions.
 
 ![Tadka graphical diagnostic](https://raw.githubusercontent.com/Bombay-Boyz/tadka/main/assets/tadka-diagnostic.png)
 
+Tadka adds a reporting layer to the error types you already have. It does not
+replace `Either`, `ExceptT`, or exceptions: add a `Diagnostic` instance to say
+how an error should be presented, and keep propagating it however you like.
 
-## Why tadka?
+## Quick start
 
-**Tadka** adds a reporting layer to your existing error types. It does not
-replace your application's error-propagation mechanism.
-
-You can keep using:
-
-```haskell
-Either MyError a
-```
-
-or:
-
-```haskell
-ExceptT MyError IO a
-```
-
-or another error-handling design. Add a `Diagnostic` instance to describe how
-the error should be presented.
-
-For code that only propagates via exceptions — a caught `SomeException` from
-a library, or a boundary that isn't going to be rewritten to thread an
-`Either` through — `Tadka.Internal.Exception` (re-exported from `Tadka`)
-provides an opt-in bridge: `throwDiagnostic`/`catchDiagnostic` make a
-`Diagnostic` value `throwIO`/`catch`-able as an ordinary GHC exception, and
-`installPanicHook` makes an uncaught one print as a full report instead of
-GHC's default `show` dump. This is an addition alongside the
-`Either`/`ExceptT` story above, not a replacement for it.
-
-The main features are:
-
-- Source-aware diagnostics with labeled spans.
-- Graphical, narratable, and JSON output.
-- Primary and secondary labels, including collections of labels.
-- Diagnostics spanning multiple source files.
-- Error codes, severity, help text, and documentation URLs.
-- Related diagnostics and underlying cause chains.
-- Bounded rendering and cycle protection for diagnostic chains.
-- Unicode-aware source positioning, including tabs, combining characters,
-  East Asian width, and emoji, with full grapheme-cluster clustering so a
-  decomposed character sequence or a multi-code-point emoji is measured and
-  caret-aligned as the single character it renders as.
-- Explicit handling of stale source spans when source text has changed.
-- Adapters for GHC `SrcSpan`, Megaparsec, and Attoparsec.
-- An opt-in bridge into ordinary `throwIO`/`catch` exception propagation, and
-  an ad hoc escape hatch for turning a `Show`-only error or a caught
-  exception into a diagnostic without writing a dedicated type.
-- Optional syntax highlighting of source snippets, via `skylighting`.
-- A `SourceCode` extension point for a custom source representation, beyond
-  the built-in in-memory `NamedSource`.
-
-## What it looks like
-
-A graphical diagnostic can look along these lines:
-
-```text
-error[E1001]: unexpected token
-
- --> example.td:4:9
-  |
-4 | let x = foo(
-  |         ^^^ expected an expression
-  |
-  = help: check the expression following `foo`
-```
-
-The same diagnostic can be rendered as accessible prose or as JSON, depending
-on the selected target.
-
-## Installation
-
-Add `tadka` to your package's dependencies:
+Add these to `build-depends` of an executable (the messages are
+[`prettyprinter`](https://hackage.haskell.org/package/prettyprinter) documents,
+and the example builds its source text with `text`):
 
 ```cabal
 build-depends:
-    tadka
+    base
+  , prettyprinter
+  , tadka
+  , text
 ```
 
-Then import the public API:
+This is a complete program. Put it in `Main.hs` and run it:
 
 ```haskell
-import Tadka
-```
+{-# LANGUAGE OverloadedStrings #-}
 
-`tadka` is designed to work with ordinary Cabal projects and existing
-`Either`, `ExceptT`, or custom error types.
+import           Data.List.NonEmpty (NonEmpty (..))
+import           Data.Text          (Text)
+import           Prettyprinter      (pretty)
+import           Tadka
 
-## Five-minute example
-
-Define an ordinary error type:
-
-```haskell
-data MyError
-  = UnexpectedToken Span
-  | MissingName Span
-  deriving stock (Show)
-```
-
-Give it a diagnostic description:
-
-```haskell
-instance Diagnostic MyError where
-  message = \case
-    UnexpectedToken _ -> "unexpected token"
-    MissingName _     -> "missing name"
-
-  context = \case
-    UnexpectedToken span ->
-      mkContext source
-        (Labeled span Primary (Just "expected an expression") :| [])
-
-    MissingName span ->
-      mkContext source
-        (Labeled span Primary (Just "a name is required here") :| [])
-
-  code = const (Just (mkDiagnosticCode "E1001"))
-```
-
-Then report it:
-
-```haskell
-reportDiagnostic defaultConfig err
-```
-
-The reporting layer remains separate from the way your application creates,
-returns, or handles `MyError`.
-
-## Deriving diagnostics
-
-For error types where the diagnostic information follows a regular structure,
-`tadka` provides Template Haskell support.
-
-For example:
-
-```haskell
-data ParseError = ParseError
-  { parseMessage :: Text
-  , parseSpan    :: Span
+-- | What went wrong, and where.
+data UnboundVariable = UnboundVariable
+  { uvName   :: Text
+  , uvSource :: NamedSource
+  , uvAt     :: Span
   }
-  deriving stock (Show)
 
-$(deriveDiagnostic defaultSpec
-    { specMessage     = [| \e -> pretty (parseMessage e) |]
-    , specSourceField = Just 'parseSpan
-    })
+-- A diagnostic code is checked when it is built, so keep it in one place.
+unboundCode :: DiagnosticCode
+unboundCode = either (error . show) id (mkDiagnosticCode "demo::E0001")
+
+instance Diagnostic UnboundVariable where
+  message e = pretty ("unbound variable " <> uvName e)
+  code _    = Just unboundCode
+  help _    = Just (pretty ("check the spelling, or import the name" :: Text))
+  context e = mkContextDegrading (uvSource e)
+                (Labeled (uvAt e) Primary (Just (pretty ("not in scope" :: Text))) :| [])
+
+-- | @quantity@ is the eight characters starting at offset 20.
+demo :: UnboundVariable
+demo = UnboundVariable "quantity" source at
+  where
+    source = either (error . show) id (mkNamedSource "demo.hs" "let total = price * quantity\n")
+    at     = either (error . show) id (mkSpan 20 8)
+
+main :: IO ()
+main = reportDiagnostic defaultConfig demo
 ```
 
-The derivation API can also describe error codes, help text, URLs, primary and
-secondary labels, related diagnostics, causes, and diagnostic identity.
+Printed to a terminal, the report is drawn like this (without colour here, so
+that it can be shown as text):
 
-The same spec can also be built from a flat list of directives, which reads
-closer to a co-located attribute list than a single record update:
-
-```haskell
-$(deriveDiagnostic (diagnosticSpec
-    [ diagMessage     [| \e -> pretty (parseMessage e) |]
-    , diagSource      'parseSpan
-    , diagLabel       'badBit "this bit here"
-    , diagHelp        "try doing it better next time?"
-    ]) ''ParseError)
-```
-
-This is a plain, ordinarily-typechecked builder over the same
-`DiagnosticSpec`, not a custom parser — `defaultSpec { ... }` and
-`diagnosticSpec [ ... ]` produce identical specs and remain fully
-interchangeable.
-
-A collection label field (`specLabelCollectionFields`/`diagLabelCollection`)
-normally gives every element of a runtime-sized `[Span]` field the same
-label text. When each element needs its own distinct text instead,
-`specLabelCollectionFieldsWith`/`diagLabelCollectionWith` take an `e -> [(Span,
-Text)]` expression that pairs each span with its own text directly.
-
-## Source spans
-
-`tadka` keeps source text and source locations explicit.
-
-A `Span` identifies a range in a named source. It can be resolved against the
-source text to obtain line and column information:
-
-```haskell
-resolved <- resolveSpan source span
-```
-
-The implementation accounts for details that can make source positioning
-non-trivial, including:
-
-- tabs
-- Unicode characters
-- combining characters
-- East Asian character width
-- emoji
-- large source offsets
-
-When source text has changed and a span can no longer be trusted, `tadka`
-represents that condition explicitly rather than silently presenting a
-misleading location.
-
-## Labeled source context
-
-A diagnostic can contain primary and secondary labels:
-
-```haskell
-mkContext source
-  (Labeled span1 Primary (Just "the problem is here")
-    :| [Labeled span2 Secondary (Just "this is also relevant")])
-```
-
-Multiple source files are supported as well.
-
-`tadka` can also degrade stale spans when source text no longer matches the
-coordinates stored by an error value.
-
-## Rendering
-
-**Tadka** currently provides three output targets:
-
-- `TGraphical` — terminal-oriented diagnostic output.
-- `TNarratable` — accessible prose-oriented output.
-- `TJson` — machine-readable JSON output.
-
-A `Config` controls reporting behavior such as color, Unicode, hyperlinks,
-context lines, tab width, related-diagnostic depth, label palettes, cause
-rendering, syntax highlighting, and the selected target.
-
-For example:
-
-```haskell
-let config =
-      withTarget TGraphical
-      $ withColorMode ColorAuto
-      $ defaultConfig
-
-reportDiagnostic config err
-```
-
-Unlike color and Unicode, which default to `*Auto` (detected from the
-destination), `withHyperlinkMode` defaults to `HyperlinkNever`: OSC 8 (the
-terminal escape sequence used for clickable text) has no reliable capability
-query the way TTY-ness does, so a terminal that otherwise looks interactive
-may still not render the escape as a link. Call `withHyperlinkMode
-HyperlinkAuto` (or `HyperlinkAlways`) to opt in to hyperlinked `= see:` URLs.
-
-By default, a diagnostic's own cause chain (`diagnosticCause`) renders as a
-lightweight, single-line summary — code and message only — even when the
-cause is itself a rich `Diagnostic` with its own spans. Call
-`withCauseDetail CauseFull` for a cause to render as a fully nested report,
-the same way a `related` diagnostic already does.
-
-Source snippets are plain text by default. Call `withHighlightMode
-HighlightAuto` to tokenize each snippet via its source's own name (matched
-by extension/filename), or `withHighlightMode (HighlightLanguage "...")` to
-force a specific syntax regardless of source name. Highlighting is always
-suppressed under `ColorNever`, since there is no plain-text form of a
-colourised token stream to degrade to.
-
-The renderer selection and lower-level rendering APIs are also available when
-applications need more control, including `reportDiagnosticTo`/
-`renderDiagnosticTo` for writing to a `Handle` other than `stdout` (e.g.
-`stderr`, a log sink) or getting back the rendered `Text` directly.
-
-## Existing error types
-
-**Tadka** does not require a new application-wide error architecture.
-
-If an application already has error types, they can remain ordinary Haskell
-values. A `Diagnostic` instance describes how each error should be presented
-to a human or another tool.
-
-This separation is useful when the same error value needs to be:
-
-- returned through `Either`
-- propagated through `ExceptT`
-- logged
-- displayed in a terminal
-- returned as JSON
-- embedded in another diagnostic
-
-## Related diagnostics and causes
-
-Diagnostics can contain related diagnostics and an underlying cause chain.
-
-This lets an application represent structures such as:
-
+<!-- output: quickstart -->
 ```text
-top-level error
-    |
-    +-- related diagnostic
-    |
-    +-- underlying cause
-            |
-            +-- underlying cause
+error[demo::E0001]: unbound variable quantity
+  ┌─ demo.hs:1:21
+  │
+1 │ let total = price * quantity
+  │                     ^^^^^^^^ not in scope
+  │
+  = help: check the spelling, or import the name
 ```
 
-**Tadka** bounds traversal depth and supports diagnostic identity so that
-recursive or cyclic structures cannot cause unbounded rendering.
+The error type is an ordinary record. The `Diagnostic` instance describes it:
+only `message` is required, and everything else has a default. `context` says
+*where* the error is, as a source plus labelled spans. `reportDiagnostic` prints
+the report, and `defaultConfig` picks colour and Unicode drawing from the
+terminal it is printing to.
+
+### Diagnostic codes
+
+A code is a lowercase namespace, `::`, the letter `E`, and at least four digits,
+such as `demo::E0001`. `mkDiagnosticCode` returns a `Left` for anything else.
+Build each code once, at the top level, as above. With `deriveDiagnostic`, below,
+a malformed code is a compile-time error instead.
+
+## Deriving the instance
+
+When the diagnostic information follows the shape of your error type, derive the
+instance with Template Haskell. A record update on `defaultSpec` describes the
+fields:
+
+```haskell
+data TypeMismatch = TypeMismatch
+  { tmSource   :: NamedSource
+  , tmAt       :: Span
+  , tmExpected :: Text
+  , tmActual   :: Text
+  }
+  deriving (Show)
+
+deriveDiagnostic defaultSpec
+  { specCode        = Just "demo::E0002"
+  , specHelp        = Just "convert one side explicitly"
+  , specSourceField = Just 'tmSource
+  , specLabelFields = [('tmAt, "type mismatch here")]
+  , specMessage     = Just [| \e -> pretty ("expected " <> tmExpected e <> ", found " <> tmActual e) |]
+  }
+  ''TypeMismatch
+```
+
+or the same thing as a flat list, with `diagnosticSpec`:
+
+```haskell
+data ArityError = ArityError
+  { aeSource :: NamedSource
+  , aeCall   :: Span
+  , aeWanted :: Int
+  , aeGiven  :: Int
+  }
+  deriving (Show)
+
+deriveDiagnostic
+  (diagnosticSpec
+     [ diagCode "demo::E0003"
+     , diagHelp "remove the extra arguments"
+     , diagSource 'aeSource
+     , diagLabel 'aeCall "called here"
+     , diagMessage [| \e -> pretty ("expected " <> T.pack (show (aeWanted e))
+                                    <> " arguments, got " <> T.pack (show (aeGiven e))) |]
+     ])
+  ''ArityError
+```
+
+The two forms build the same `DiagnosticSpec` and can be mixed freely. Field
+names are checked against the record when the splice runs, so a misspelt field,
+a field of the wrong type, or a malformed code is a compile-time error. Without
+`specMessage` the message is `pretty . show`, which needs a `Show` instance.
+
+Printing both gives:
+
+<!-- output: derive -->
+```text
+error[demo::E0002]: expected Int, found Text
+  ┌─ demo.hs:1:17
+  │
+1 │ total = count + "1"
+  │                 ^^^ type mismatch here
+  │
+  = help: convert one side explicitly
+
+error[demo::E0003]: expected 2 arguments, got 3
+  ┌─ demo.hs:1:1
+  │
+1 │ area 3 4 5
+  │ ^^^^^^^^^^ called here
+  │
+  = help: remove the extra arguments
+```
+
+The tutorial covers every `DiagnosticSpec` field, secondary labels, label
+collections whose length is only known at run time, causes, related diagnostics,
+and deriving a whole family of errors from one sum type with
+`deriveDiagnosticSum`.
+
+## Output formats
+
+Three output targets are selected with `withTarget`:
+
+```haskell
+-- | Choose the output format with 'withTarget'.
+narratableConfig, jsonConfig :: Config
+narratableConfig = withTarget TNarratable defaultConfig
+jsonConfig       = withTarget TJson defaultConfig
+```
+
+`TGraphical` is the report shown above and is the default. `TNarratable` writes
+the same information as prose, for screen readers and logs:
+
+<!-- output: format-narratable -->
+```text
+Error, code demo::E0001: unbound variable quantity.
+Location: demo.hs, line 1, column 21.
+Source line 1: "let total = price * quantity".
+The problem is at columns 21 through 28, labeled: not in scope.
+Help: check the spelling, or import the name
+```
+
+`TJson` writes machine-readable JSON:
+
+<!-- output: format-json -->
+```text
+{"causes":[],"code":"demo::E0001","cycleOmitted":false,"help":"check the spelling, or import the name","labels":[{"column":21,"file":"demo.hs","length":8,"line":1,"primary":true,"stale":false,"text":"not in scope"}],"message":"unbound variable quantity","related":[],"schemaVersion":1,"severity":"error","truncated":false,"url":null}
+```
+
+The JSON has a `schemaVersion` field. It changes only when the shape of the
+JSON changes in a way a consumer must handle, independently of the package
+version. Currently it is `1`.
+
+## Configuration
+
+Start from `defaultConfig` and apply `with...` functions.
+
+| Setting | Function | Default |
+|---|---|---|
+| Colour | `withColorMode` (`ColorAuto`, `ColorAlways`, `ColorNever`) | `ColorAuto`: on when the destination is a terminal |
+| Unicode box drawing | `withUnicodeMode` | `UnicodeAuto`: on when the locale and the destination are UTF-8 |
+| Clickable links | `withHyperlinkMode` | `HyperlinkNever`: terminals give no reliable way to ask |
+| Related and cause depth | `withRelatedDepthLimit` | 8 |
+| Tab width | `withTabWidth` | 4 |
+| Context lines | `withContextLines` | unset: show the contiguous range |
+| Label colours | `withLabelPalette` | built-in palette |
+| Output format | `withTarget` | graphical |
+| Cause detail | `withCauseDetail` (`CauseSummary`, `CauseFull`) | `CauseSummary`: one line per cause |
+| Syntax highlighting | `withHighlighter`, `withoutHighlighter` | none |
+
+`reportDiagnostic` prints to standard output. `reportDiagnosticTo` prints to any
+`Handle`, such as `stderr`, and `renderDiagnosticTo` returns the report as
+`Text`. Colour and Unicode are detected for the handle being written to, and
+text that a handle's encoding cannot represent becomes `?` instead of raising an
+exception.
+
+## Highlighting source snippets
+
+Tadka itself has no syntax highlighter. A `Highlighter` is a function from a
+source's name and its lines to the same lines with colour added, and
+`withHighlighter` plugs one in. This toy makes the word `let` cyan:
+
+```haskell
+-- | Receives the source's name and all its lines; returns one coloured line
+-- per input line, or 'Nothing' to leave the source plain.
+keywords :: Highlighter
+keywords = Highlighter
+  { highlighterName = "keywords"
+  , runHighlighter  = \_ ls -> Just (map (T.replace "let" "\ESC[36mlet\ESC[0m") ls)
+  }
+
+-- | Colour must be on for a highlighter to run.
+coloured :: Config
+coloured = withHighlighter keywords (withColorMode ColorAlways (withUnicodeMode UnicodeAlways defaultConfig))
+```
+
+Whatever a highlighter returns, Tadka keeps a line only if removing its colour
+codes gives back exactly the original line. A highlighter can add colour; it
+cannot change the text, move a caret, or emit any other terminal escape
+sequence. Highlighting does nothing under `ColorNever`.
+
+For real highlighting, the separate [`tadka-highlight`](tadka-highlight/README.md)
+package provides a highlighter backed by `skylighting`:
+
+```haskell
+config :: Config
+config = withHighlighter (skylightingAuto pygments) defaultConfig
+```
+
+**`tadka-highlight` is GPL-2.0-only**, because `skylighting` is. `tadka` itself
+is MIT and does not depend on either; see [Licence](#licence).
+
+## Your own source representation
+
+Spans point into a `SourceCode`. The built-in `NamedSource` is a strict `Text`
+and a name, but any type with a `SourceCode` instance works, for example an
+editor buffer that is never one big `Text`:
+
+```haskell
+-- | A named buffer: its lines, without line terminators.
+data Buffer = Buffer
+  { bufName  :: Text
+  , bufLines :: [Text]
+  }
+
+-- A source always has at least one line, even when empty.
+linesOf :: Buffer -> [Text]
+linesOf b = if null (bufLines b) then [T.empty] else bufLines b
+
+instance SourceCode Buffer where
+  scName = bufName
+
+  -- Length in code points, counting one character per line break.
+  scLength b = T.length (T.intercalate "\n" (linesOf b))
+
+  scLineCount b = length (linesOf b)
+
+  -- A window of lines, 1-based and inclusive, clipped to what exists.
+  scLines b (lo, hi) =
+    [ (n, l) | (n, l) <- zip [1 ..] (linesOf b), n >= max 1 lo, n <= hi ]
+
+  -- Line and column (both 1-based) of a code-point offset.
+  scLocate b offset = go 1 offset (linesOf b)
+    where
+      go n o (l : rest)
+        | o <= T.length l || null rest = LineCol n (o + 1)
+        | otherwise                    = go (n + 1) (o - T.length l - 1) rest
+      go n o []                        = LineCol n (o + 1)
+```
+
+Pass it wherever a source is expected:
+
+```haskell
+-- | A diagnostic whose source is the buffer.
+data NameClash = NameClash Buffer Span
+
+instance Diagnostic NameClash where
+  message _ = pretty ("name defined twice" :: Text)
+  context (NameClash buf at) =
+    mkContextDegrading buf (Labeled at Primary (Just (pretty ("second definition" :: Text))) :| [])
+```
+
+<!-- output: custom-source -->
+```text
+error: name defined twice
+  ┌─ scratch buffer:3:1
+  │
+3 │ x = 3
+  │ ^ second definition
+```
+
+A diagnostic stores its sources as `SomeSource`, so a context can mix source
+types. The derive macros accept a field of type `NamedSource` or `SomeSource`.
+
+## Diagnostics without a type of their own
+
+`adHoc` builds a diagnostic from text, `fromError` from any `Exception`, and
+`wrapErr` wraps one diagnostic as the cause of another. `withCode`,
+`withSeverity`, `withHelp`, `withUrl`, and `withSourceCode` fill in the rest:
+
+```haskell
+loadFailed :: AdHocDiagnostic
+loadFailed =
+    withHelp "check that the file exists and is readable"
+  . withCode (either (error . show) id (mkDiagnosticCode "demo::E0004"))
+  $ wrapErr "could not load the configuration" (fromError (userError "config.toml: not found"))
+```
+
+Any diagnostic can also be thrown and caught as an ordinary exception:
+
+```haskell
+-- | Throw it, catch it as a 'SomeDiagnostic', and print the report.
+report :: IO ()
+report =
+  catchDiagnostic (throwDiagnostic loadFailed)
+    (\(SomeDiagnostic e) -> reportDiagnostic defaultConfig e)
+```
+
+<!-- output: ad-hoc -->
+```text
+error[demo::E0004]: could not load the configuration
+  = help: check that the file exists and is readable
+  = caused by: user error (config.toml: not found)
+```
+
+`installPanicHook` makes an uncaught diagnostic exception print as a full
+report on standard error, instead of GHC's default dump.
+
+## Related diagnostics, causes, and several files
+
+A diagnostic can carry `related` diagnostics and one underlying cause
+(`diagnosticCause`), both as `SomeDiagnostic`. A cause is shown as one line by
+default; `withCauseDetail CauseFull` shows each cause of the reported
+diagnostic as a full nested report. Rendering is bounded: chains stop at the
+related-depth limit, a `diagnosticId` stops a repeated diagnostic, and the
+causes of related diagnostics are always one-line summaries, so even a cyclic
+structure cannot produce an unbounded report.
+
+`mkContextMulti` builds one context whose labels live in several files. When a
+span no longer fits its source because the text has changed, the `Degrading`
+constructors, such as `mkContextDegrading`, keep the rest of the report and
+mark that label stale instead of failing. The [tutorial](TADKA-TUTORIAL.md)
+shows each of these.
 
 ## Parser and compiler integration
 
-**Tadka** includes integration packages for common Haskell tooling:
+Three optional sub-libraries convert a parser's source position into a Tadka
+`Span`. They do not build a whole diagnostic for you; you write the `Diagnostic`
+instance and use the span in it.
 
-```text
-tadka:interop-ghc
-tadka:interop-megaparsec
-tadka:interop-attoparsec
+| Sub-library | Functions |
+|---|---|
+| `tadka:interop-megaparsec` | `spanFromError` |
+| `tadka:interop-attoparsec` | `consumedOffset`, `spanFromConsumed` |
+| `tadka:interop-ghc` | `spanFromSrcSpan`, `offsetFromLineCol` |
+
+The core package does not depend on any of these parsers.
+
+## Text, columns, and width
+
+Offsets in a `Span` count Unicode code points. Carets are placed by display
+width: tabs are expanded, combining marks add no width, East Asian wide
+characters take two columns, and emoji sequences (flags, skin tones, ZWJ
+sequences, keycaps) take two columns as one character, while symbols such as
+(c), (R), and TM that terminals draw in one cell stay one column.
+
+## Stability and support
+
+The supported API is the `Tadka` module. The `Tadka.Internal.*` modules are
+exposed for implementers and carry no compatibility guarantee.
+
+Tadka is built and tested with GHC 9.6.7, 9.8.4, 9.10.3, 9.12.4, and 9.14.1.
+The test suites are golden-output tests, property tests, interop round trips,
+generated-code checks, and compile-failure checks for the derive macro.
+
+### The documentation is tested
+
+Every Haskell block in this README and in the tutorial is a verbatim excerpt of
+a file that the `docs`, `hello`, and `smoke` test-suites compile, and every
+output block is checked against what its example really prints. If an example
+stops compiling or its output changes, `cabal test` fails. To see the output of
+every example:
+
+```sh
+cabal run test:docs -- --print
 ```
 
-These adapters allow existing parser and compiler source locations to be
-translated into **Tadka** source-span information without requiring the
-application to redesign its diagnostics.
+## Scope
 
-## JSON output
+Tadka represents and renders diagnostics. It is not an application-wide error
+framework, an LSP implementation, an editor integration, a logging framework, or
+a syntax-highlighting engine, and it does not parse your language for you.
 
-JSON output is intended for applications that need to pass diagnostics to
-other programs, scripts, editor tooling, or services.
+## Licence
 
-The JSON representation should be treated as an output format of the
-corresponding Tadka release. If another program depends on its exact shape,
-pinning the `tadka` version is the safest approach.
+`tadka` is released under the [MIT licence](LICENSE).
 
-## Accessibility
+The optional [`tadka-highlight`](tadka-highlight/README.md) package is
+GPL-2.0-only because it depends on `skylighting`, which is GPL-2. A program that
+depends only on `tadka` contains no GPL code.
 
-The narratable renderer provides a prose-oriented representation of the same
-structured diagnostic.
+## Contributing
 
-This is useful when graphical terminal formatting, Unicode drawing
-characters, or visual source annotations are not appropriate.
-
-## Public API boundary
-
-The primary application-facing API is:
-
-```haskell
-import Tadka
-```
-
-The package also exposes internal modules for implementation-level use, but
-they are not intended to provide the same compatibility guarantees as the
-public API.
-
-Applications should prefer the public `Tadka` module unless they have a
-specific reason to use an internal module.
-
-## Testing and engineering
-
-**Tadka** is tested across multiple supported GHC versions and includes:
-
-- unit and property tests
-- renderer tests
-- golden tests
-- parser/compiler interop tests
-- generated-code checks
-- compile-failure checks
-- adversarial source-position cases
-- Unicode and tab-positioning cases
-- stale-source handling
-- multi-source diagnostics
-- related/cause-chain protection
-
-The project is developed with warnings enabled and maintains explicit
-dependency bounds.
-
-## Current scope
-
-**Tadka** focuses on structured diagnostic representation and rendering.
-
-It intentionally does not attempt to be all of the following at once:
-
-- an application-wide error-handling framework
-- an LSP implementation
-- an editor integration layer
-- a syntax-highlighting engine (snippet highlighting is optional and backed
-  by the existing `skylighting` library, not a tokenizer tadka builds itself)
-- a general-purpose logging framework
-- a replacement for parser-specific error types
-
-Those concerns can be built around the diagnostic representation when an
-application needs them.
-
-## License
-
-**Tadka** is released under the Mozilla Public License 2.0 (MPL-2.0).
-
-See [`LICENSE`](LICENSE) for the complete license text.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Acknowledgement
 
 The design is inspired in part by Rust's [`miette`](https://github.com/zkat/miette),
 particularly its approach to structured diagnostics, source snippets, labels,
-and human-friendly reporting.
-
-Tadka is an independent Haskell implementation designed around Haskell's
-type system, libraries, and conventions.
+and human-friendly reporting. Tadka is an independent Haskell implementation
+designed around Haskell's type system, libraries, and conventions.

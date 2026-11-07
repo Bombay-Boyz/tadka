@@ -1,7 +1,11 @@
 {-# LANGUAGE ExistentialQuantification #-}
 
-
--- No compatibility guarantee.
+-- | The 'Diagnostic' class: how to present an error, and 'SomeDiagnostic', a
+-- diagnostic of any type. Only 'message' is required; every other method has
+-- a default.
+--
+-- No compatibility guarantee for this module's path; the names are
+-- re-exported from "Tadka".
 module Tadka.Internal.Diagnostic
   ( Diagnostic (..)
   , SomeDiagnostic (..)

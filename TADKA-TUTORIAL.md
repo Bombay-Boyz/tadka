@@ -1,313 +1,258 @@
-# Tadka: A Usage Tutorial
+# Tadka tutorial
 
-This is a step-by-step guide to using **Tadka**, aimed at someone who has never
-used the library before. If you just want the five-minute version, the
-[README](README.md) has a shorter introduction. This document goes deeper:
-it walks through the public API in `Tadka` in the order you're likely to need it.
-
-If you already know Rust's [`miette`](https://github.com/zkat/miette), the
-overall shape will feel familiar.
-
-## Table of contents
-
-1. [Installing](#1-installing)
-2. [The core idea](#2-the-core-idea)
-3. [Your first diagnostic, by hand](#3-your-first-diagnostic-by-hand)
-4. [The same thing, derived](#4-the-same-thing-derived)
-5. [Rendering: the three targets](#5-rendering-the-three-targets)
-6. [Configuring the output](#6-configuring-the-output)
-7. [Multiple labels in one diagnostic](#7-multiple-labels-in-one-diagnostic)
-8. [A variable number of labels](#8-a-variable-number-of-labels)
-9. [Related diagnostics and cause chains](#9-related-diagnostics-and-cause-chains)
-10. [Diagnostics that span more than one file](#10-diagnostics-that-span-more-than-one-file)
-11. [Deriving a whole family of errors at once](#11-deriving-a-whole-family-of-errors-at-once)
-12. [Hooking up a parser or compiler](#12-hooking-up-a-parser-or-compiler)
-13. [Where to look next](#13-where-to-look-next)
-
-
-> **Copy-paste rule.** Every section that says **Complete program** contains a full `Main.hs` you can copy into a small Cabal project and run. Other Haskell blocks are deliberately shorter API fragments; they are not presented as standalone programs.
-
-### One-time project setup
-
-For the runnable examples below, create this minimal Cabal project once:
-
-```sh
-mkdir tadka-demo
-cd tadka-demo
-cat > tadka-demo.cabal <<'EOF'
-cabal-version: 3.0
-name: tadka-demo
-version: 0.1.0.0
-build-type: Simple
-
-executable tadka-demo
-  main-is: Main.hs
-  build-depends:
-      base
-    , tadka
-  default-language: GHC2021
-EOF
-```
-
-Then put one of the complete `Main.hs` examples below into `Main.hs` and run:
-
-```sh
-cabal run
-```
-
-The project deliberately lists only `base` and `tadka`: the examples use only Tadka's public API and do not require application code to depend directly on Tadka's implementation modules.
+This tutorial builds up from one hand-written diagnostic to derived families of
+errors, several files, causes, and your own source representation. Every Haskell
+block here is a verbatim excerpt of a file that Tadka's test suites compile, and
+every block of program output is checked against what its example really prints
+(see [The documentation is tested](README.md#the-documentation-is-tested)). The
+complete, runnable versions are in `test/docs/Examples` and `test/hello`.
 
 ## 1. Installing
 
-Add `tadka` to your `.cabal` file's `build-depends`, just like any other
-package:
+Add `tadka` to `build-depends`. The examples also use `prettyprinter` (messages
+are its `Doc` values) and `text`:
 
 ```cabal
 build-depends:
-    base,
-    tadka
+    base
+  , prettyprinter
+  , tadka
+  , text
 ```
 
-`tadka` needs GHC 9.6 or newer. If you're using the parser/compiler interop
-helpers, add the corresponding sub-library:
+The examples use `OverloadedStrings`, and the library is built with
+`default-language: GHC2021`. Tadka is tested with GHC 9.6.7, 9.8.4, 9.10.3,
+9.12.4, and 9.14.1.
 
-```text
-tadka:interop-megaparsec
-tadka:interop-attoparsec
-tadka:interop-ghc
-```
+Optional packages, each separate so the core stays small:
 
-Each interop package is a separate sub-library, so the core package does not
-pull in a parser or compiler API unless you use the relevant integration.
+- `tadka:interop-megaparsec`, `tadka:interop-attoparsec`, and
+  `tadka:interop-ghc`: convert a parser's position into a Tadka `Span`.
+- `tadka-highlight`: syntax highlighting. It is GPL-2.0-only; see
+  [section 14](#14-syntax-highlighting).
 
-The application-facing module is:
+## 2. The idea
+
+A *diagnostic* is any type with an instance of the `Diagnostic` class. The class
+says how to present a value; it does not change how you create or propagate it.
+
+| Method | Meaning | Default |
+|---|---|---|
+| `message` | The headline, a `Doc Ann`. | required |
+| `context` | Where the error is: sources and labelled spans. | no source |
+| `code` | A stable code such as `demo::E0001`. | none |
+| `severity` | `SevError`, `SevWarning`, or `SevAdvice`. | `SevError` |
+| `help` | A suggestion. | none |
+| `url` | A documentation link. | none |
+| `related` | Further diagnostics, as `SomeDiagnostic`. | none |
+| `diagnosticId` | An identity, used to stop repeated diagnostics. | none |
+| `diagnosticCause` | One underlying diagnostic. | none |
+
+You write the instance by hand (section 3), derive it (section 4), or skip the
+type altogether with an ad hoc diagnostic (section 13).
+
+## 3. A first diagnostic
+
+Start with a type holding what went wrong and where. The location is a source
+(`NamedSource`: some text and a name) and a `Span` (an offset and a length, both
+counted in Unicode code points):
 
 ```haskell
-import Tadka
-```
-
-Modules under `Tadka.Internal.*` are implementation-facing and are not part of
-the stable application API.
-
-## 2. The core idea
-
-Tadka is built around one typeclass:
-
-```haskell
-class Diagnostic e where
-  message :: e -> Doc Ann
-  context :: e -> Context
-  code :: e -> Maybe DiagnosticCode
-  severity :: e -> Severity
-  help :: e -> Maybe (Doc Ann)
-  url :: e -> Maybe Url
-  related :: e -> [SomeDiagnostic]
-  diagnosticId :: e -> Maybe DiagnosticId
-  diagnosticCause :: e -> Maybe SomeDiagnostic
-```
-
-Only `message` is required. The other methods have defaults, so a minimal
-diagnostic can be very small.
-
-Once your error type has a `Diagnostic` instance, Tadka can render the same
-value as graphical terminal output, accessible prose, or JSON.
-
-The two ideas worth understanding first are:
-
-- **`Context`** describes *where* the error is: source text plus labeled spans.
-- **`Config`** describes *how* the diagnostic is rendered: target, color,
-  Unicode, hyperlinks, context lines, tab width, and other output settings.
-
-You can therefore keep your application's existing error-propagation design
-and add reporting separately.
-
-## 3. Your first diagnostic, by hand
-
-Before using Template Haskell, write one instance manually once. This makes the
-derived version easier to understand.
-
-**Complete program — copy this entire block into `Main.hs`:**
-
-```haskell
-{-# LANGUAGE OverloadedStrings #-}
-
-import Data.List.NonEmpty (NonEmpty (..))
-import Tadka
-
 data UnboundVariable = UnboundVariable
-  { uvSource :: NamedSource
+  { uvName   :: Text
+  , uvSource :: NamedSource
   , uvAt     :: Span
   }
+```
+
+Build the diagnostic code once. A code is a lowercase namespace, `::`, the
+letter `E`, and at least four digits; `mkDiagnosticCode` returns a `Left` for
+anything else. Then write the instance: the message, the code, a help line, and a
+`context` with one primary label:
+
+```haskell
+unboundCode :: DiagnosticCode
+unboundCode = either (error . show) id (mkDiagnosticCode "demo::E0001")
 
 instance Diagnostic UnboundVariable where
-  message _ = "undefined variable"
+  message e = pretty ("unbound variable " <> uvName e)
+  code _    = Just unboundCode
+  help _    = Just (pretty ("check the spelling, or import the name" :: Text))
+  context e = mkContextDegrading (uvSource e)
+                (Labeled (uvAt e) Primary (Just (pretty ("not in scope" :: Text))) :| [])
+```
 
-  context e =
-    either (const NoContext) id $
-      mkContext (uvSource e)
-        (Labeled (uvAt e) Primary (Just "not found in this scope") :| [])
+`mkContextDegrading` always gives a `Context`. If a span does not fit its source,
+that label is marked stale and the rest of the report survives. The `mkContext`
+variant returns an `Either` instead, for callers who prefer to reject bad spans.
 
-  code _ =
-    either (const Nothing) Just (mkDiagnosticCode "demo::E0001")
+Make a value. The span is the eight characters of `quantity`, starting at
+offset 20:
 
-  help _ =
-    Just "check for typos, or import the module that defines it"
+```haskell
+-- | @quantity@ is the eight characters starting at offset 20.
+demo :: UnboundVariable
+demo = UnboundVariable "quantity" source at
+  where
+    source = either (error . show) id (mkNamedSource "demo.hs" "let total = price * quantity\n")
+    at     = either (error . show) id (mkSpan 20 8)
+```
 
+Print it:
+
+```haskell
 main :: IO ()
-main =
-  case ( mkNamedSource "Main.hs" "main = print (foo + 1)\n"
-       , mkSpan 14 3
-       ) of
-    (Right source, Right at) ->
-      reportDiagnostic defaultConfig (UnboundVariable source at)
-    (Left _, _) ->
-      putStrLn "could not create the source"
-    (_, Left _) ->
-      putStrLn "could not create the span"
+main = reportDiagnostic defaultConfig demo
 ```
 
-Run it with:
-
-```sh
-cabal run
-```
-
-You should get a graphical diagnostic pointing at `foo`. The exact terminal
-box-drawing characters can vary with configuration and terminal capabilities.
-
-The important point is that the `Diagnostic` instance describes the diagnostic
-without changing the underlying error type. The smart constructors such as
-`mkContext` and `mkDiagnosticCode` validate their inputs and return `Either`
-values.
-
-For example:
-
-```haskell
-mkDiagnosticCode "demo::E0001"
-```
-
-returns an `Either`, allowing the application to decide what to do if the code
-is invalid.
-
-## 4. The same thing, derived
-
-Hand-writing a `Diagnostic` instance for every error type can become repetitive.
-Tadka provides Template Haskell support through `deriveDiagnostic`.
-
-**Complete program — replace `Main.hs` with this:**
-
-```haskell
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
-
-import Tadka
-
-data UnboundVariable = UnboundVariable
-  { uvSource :: NamedSource
-  , uvAt     :: Span
-  }
-
-$(deriveDiagnostic defaultSpec
-    { specMessage     = Just [| \_ -> "undefined variable" |]
-    , specCode        = Just "demo::E0001"
-    , specHelp        = Just "check for typos, or import the module that defines it"
-    , specSourceField = Just 'uvSource
-    , specLabelFields = [('uvAt, "not found in this scope")]
-    } ''UnboundVariable)
-
-main :: IO ()
-main =
-  case ( mkNamedSource "Main.hs" "main = print (foo + 1)\n"
-       , mkSpan 14 3
-       ) of
-    (Right source, Right at) ->
-      reportDiagnostic defaultConfig (UnboundVariable source at)
-    (Left _, _) ->
-      putStrLn "could not create the source"
-    (_, Left _) ->
-      putStrLn "could not create the span"
-```
-
-Run it:
-
-```sh
-cabal run
-```
-
-This is the basic pattern to copy into a real application: define your error
-type, describe its fields once with `DiagnosticSpec`, and let the derive macro
-generate the `Diagnostic` instance.
-
-The principal fields of `DiagnosticSpec` are:
-
-| Field | Purpose |
-|---|---|
-| `specCode` | Diagnostic code |
-| `specSeverity` | Diagnostic severity |
-| `specMessage` | Expression producing `Doc Ann` |
-| `specHelp` | Help text |
-| `specUrl` | Documentation URL |
-| `specSourceField` | Field containing the `NamedSource` |
-| `specLabelFields` | Fixed primary labels |
-| `specSecondaryLabelFields` | Fixed secondary labels |
-| `specLabelCollectionFields` | Collections of primary spans |
-| `specSecondaryLabelCollectionFields` | Collections of secondary spans |
-| `specRelated` | Related diagnostics |
-| `specCause` | Underlying diagnostic cause |
-| `specId` | Diagnostic identity used for cycle protection |
-
-Field names supplied to the derivation are checked against the actual record at
-splice time. This makes many mistakes compile-time errors rather than runtime
-failures.
-
-## 5. Rendering: the three targets
-
-Once you have a `Diagnostic` instance, the simplest reporting API is:
-
-```haskell
-reportDiagnostic :: Diagnostic e => Config -> e -> IO ()
-```
-
-For example:
-
-```haskell
-reportDiagnostic defaultConfig err
-```
-
-The three output targets are:
-
-```haskell
-TGraphical
-TNarratable
-TJson
-```
-
-Graphical output is intended for terminal users and can show source snippets
-with labels:
-
+<!-- output: quickstart -->
 ```text
-error[demo::E0001]: undefined variable `foo`
-
- --> Main.hs:1:15
-  |
-1 | main = print (foo + 1)
-  |               ^^^ not found in this scope
-  |
-  = help: check for typos, or import the module that defines it
+error[demo::E0001]: unbound variable quantity
+  ┌─ demo.hs:1:21
+  │
+1 │ let total = price * quantity
+  │                     ^^^^^^^^ not in scope
+  │
+  = help: check the spelling, or import the name
 ```
 
-Narratable output presents the same information as prose, making it suitable
-when graphical terminal formatting is not appropriate.
+The complete program, with its imports, is in the
+[README](README.md#quick-start).
 
-JSON output provides a machine-readable representation for programs and
-services.
+## 4. Deriving the instance
 
-If you need rendered output rather than direct reporting, the lower-level
-`render` and `selectRenderer` APIs are available.
+When the diagnostic follows the shape of the type, a Template Haskell splice
+writes the instance. Describe the fields with a record update on `defaultSpec`:
 
-## 6. Configuring the output
+```haskell
+data TypeMismatch = TypeMismatch
+  { tmSource   :: NamedSource
+  , tmAt       :: Span
+  , tmExpected :: Text
+  , tmActual   :: Text
+  }
+  deriving (Show)
 
-Start from `defaultConfig` and layer the `with*` functions you need:
+deriveDiagnostic defaultSpec
+  { specCode        = Just "demo::E0002"
+  , specHelp        = Just "convert one side explicitly"
+  , specSourceField = Just 'tmSource
+  , specLabelFields = [('tmAt, "type mismatch here")]
+  , specMessage     = Just [| \e -> pretty ("expected " <> tmExpected e <> ", found " <> tmActual e) |]
+  }
+  ''TypeMismatch
+```
+
+or with the flatter `diagnosticSpec` list:
+
+```haskell
+data ArityError = ArityError
+  { aeSource :: NamedSource
+  , aeCall   :: Span
+  , aeWanted :: Int
+  , aeGiven  :: Int
+  }
+  deriving (Show)
+
+deriveDiagnostic
+  (diagnosticSpec
+     [ diagCode "demo::E0003"
+     , diagHelp "remove the extra arguments"
+     , diagSource 'aeSource
+     , diagLabel 'aeCall "called here"
+     , diagMessage [| \e -> pretty ("expected " <> T.pack (show (aeWanted e))
+                                    <> " arguments, got " <> T.pack (show (aeGiven e))) |]
+     ])
+  ''ArityError
+```
+
+Both build the same `DiagnosticSpec`; use whichever reads better. These are its
+fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `specCode` | `Maybe Text` | Code, validated when the splice runs. |
+| `specSeverity` | `Severity` | Default `SevError`. |
+| `specHelp` | `Maybe Text` | Help line. |
+| `specUrl` | `Maybe Text` | Documentation URL, validated when the splice runs. |
+| `specSourceField` | `Maybe Name` | A `NamedSource` or `SomeSource` field. |
+| `specLabelFields` | `[(Name, Text)]` | `Span` fields shown as primary labels, with their text. |
+| `specSecondaryLabelFields` | `[(Name, Text)]` | The same, as secondary labels. |
+| `specLabelCollectionFields` | `[(Name, Text)]` | `[Span]` fields; every element is a primary label with the same text. |
+| `specSecondaryLabelCollectionFields` | `[(Name, Text)]` | The same, as secondary labels. |
+| `specLabelCollectionFieldsWith` | `[(Name, Q Exp)]` | An `e -> [(Span, Text)]` expression, so each label has its own text. |
+| `specSecondaryLabelCollectionFieldsWith` | `[(Name, Q Exp)]` | The same, as secondary labels. |
+| `specRelated` | `Maybe Name` | A `[SomeDiagnostic]` field. |
+| `specCause` | `Maybe Name` | A `Maybe SomeDiagnostic` field. |
+| `specId` | `Maybe Name` | A `Text` or `DiagnosticId` field. |
+| `specMessage` | `Maybe (Q Exp)` | An `e -> Doc Ann` expression; without it the message is `pretty . show`. |
+
+The names in `diagnosticSpec` are `diagCode`, `diagSeverity`, `diagHelp`,
+`diagUrl`, `diagSource`, `diagLabel`, `diagSecondaryLabel`,
+`diagLabelCollection`, `diagSecondaryLabelCollection`,
+`diagLabelCollectionWith`, `diagSecondaryLabelCollectionWith`, `diagRelated`,
+`diagCause`, `diagId`, and `diagMessage`.
+
+Names are checked against the record when the splice runs. A field that does not
+exist, a field of the wrong type, a malformed code, labels without a source, or
+two source fields are compile-time errors with a message that names the
+offending setting.
+
+<!-- output: derive -->
+```text
+error[demo::E0002]: expected Int, found Text
+  ┌─ demo.hs:1:17
+  │
+1 │ total = count + "1"
+  │                 ^^^ type mismatch here
+  │
+  = help: convert one side explicitly
+
+error[demo::E0003]: expected 2 arguments, got 3
+  ┌─ demo.hs:1:1
+  │
+1 │ area 3 4 5
+  │ ^^^^^^^^^^ called here
+  │
+  = help: remove the extra arguments
+```
+
+## 5. Output formats
+
+One diagnostic, three renderings, chosen with `withTarget`:
+
+```haskell
+-- | Choose the output format with 'withTarget'.
+narratableConfig, jsonConfig :: Config
+narratableConfig = withTarget TNarratable defaultConfig
+jsonConfig       = withTarget TJson defaultConfig
+```
+
+`TGraphical`, the default, is the report in section 3. `TNarratable` is prose for
+screen readers and logs:
+
+<!-- output: format-narratable -->
+```text
+Error, code demo::E0001: unbound variable quantity.
+Location: demo.hs, line 1, column 21.
+Source line 1: "let total = price * quantity".
+The problem is at columns 21 through 28, labeled: not in scope.
+Help: check the spelling, or import the name
+```
+
+`TJson` is for tools:
+
+<!-- output: format-json -->
+```text
+{"causes":[],"code":"demo::E0001","cycleOmitted":false,"help":"check the spelling, or import the name","labels":[{"column":21,"file":"demo.hs","length":8,"line":1,"primary":true,"stale":false,"text":"not in scope"}],"message":"unbound variable quantity","related":[],"schemaVersion":1,"severity":"error","truncated":false,"url":null}
+```
+
+`schemaVersion` changes only when the shape of the JSON changes in a way a
+consumer must handle; it is independent of the package version.
+
+## 6. Configuring
+
+Start from `defaultConfig` and apply `with...` functions:
 
 ```haskell
 myConfig :: Config
@@ -322,23 +267,29 @@ myConfig =
   $ defaultConfig
 ```
 
-The main configuration controls are:
+| Setting | Function | Default |
+|---|---|---|
+| Colour | `withColorMode` | `ColorAuto` |
+| Unicode box drawing | `withUnicodeMode` | `UnicodeAuto` |
+| Clickable links | `withHyperlinkMode` | `HyperlinkNever` |
+| Related and cause depth | `withRelatedDepthLimit` | 8 |
+| Tab width | `withTabWidth` | 4 |
+| Context lines | `withContextLines` | unset |
+| Label colours | `withLabelPalette` | built-in |
+| Output format | `withTarget` | graphical |
+| Cause detail | `withCauseDetail` | `CauseSummary` |
+| Highlighting | `withHighlighter` | none |
 
-- `withColorMode` — `ColorAlways`, `ColorNever`, or `ColorAuto`.
-- `withUnicodeMode` — Unicode terminal drawing versus ASCII-compatible
-  output.
-- `withHyperlinkMode` — terminal hyperlinks for documentation URLs.
-- `withContextLines` — surrounding source lines shown around labels.
-- `withTabWidth` — tab width used for source positioning.
-- `withLabelPalette` — palette used to distinguish labels.
-- `withRelatedDepthLimit` — maximum depth rendered for related/cause chains.
-- `withTarget` — `TGraphical`, `TNarratable`, or `TJson`.
+`reportDiagnostic` prints to standard output; `reportDiagnosticTo` prints to any
+`Handle`; `renderDiagnosticTo` returns the report as `Text`. Colour and Unicode
+are detected for the handle that is written to, so a report sent to `stderr`
+adapts to `stderr`. A handle whose encoding cannot represent a character gets
+`?` in its place, never an exception.
 
-## 7. Multiple labels in one diagnostic
+## 7. Primary and secondary labels
 
-A diagnostic often needs to point at more than one location.
-
-For example:
+A primary label marks the offending span; a secondary label points at related
+context. Derived:
 
 ```haskell
 data ShadowedBinding = ShadowedBinding
@@ -347,74 +298,66 @@ data ShadowedBinding = ShadowedBinding
   , sbOldAt  :: Span
   , sbName   :: Text
   }
-  deriving stock (Show)
 
-$(deriveDiagnostic defaultSpec
-    { specMessage =
-        Just [| \e -> "`" <> pretty (sbName e) <> "` shadows an earlier binding" |]
-    , specSourceField =
-        Just 'sbSource
-    , specLabelFields =
-        [('sbNewAt, "new binding here")]
-    , specSecondaryLabelFields =
-        [('sbOldAt, "previous binding was here")]
-    } ''ShadowedBinding)
+deriveDiagnostic defaultSpec
+  { specMessage =
+      Just [| \e -> "`" <> pretty (sbName e) <> "` shadows an earlier binding" |]
+  , specSourceField          = Just 'sbSource
+  , specLabelFields          = [('sbNewAt, "new binding here")]
+  , specSecondaryLabelFields = [('sbOldAt, "previous binding was here")]
+  }
+  ''ShadowedBinding
 ```
 
-Primary labels receive the more prominent treatment. Secondary labels remain
-visible but are visually de-emphasized.
-
-For manually constructed contexts, use `Labeled` values:
+or by hand, with `Labeled` and `LabelKind`:
 
 ```haskell
-mkContext source
-  (Labeled span1 Primary (Just "the problem is here")
-    :| [Labeled span2 Secondary (Just "this is also relevant")])
+data Clash = Clash NamedSource Span Span
+
+instance Diagnostic Clash where
+  message _ = "conflicting definitions"
+  context (Clash src first second) =
+    mkContextDegrading src
+      (  Labeled second Primary (Just "redefined here")
+      :| [Labeled first Secondary (Just "first defined here")])
 ```
+
+Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
 ## 8. A variable number of labels
 
-Sometimes the number of spans is known only at runtime: for example, every
-previous declaration of a name.
-
-For this case, use `specLabelCollectionFields` or
-`specSecondaryLabelCollectionFields`.
+When the number of spans is known only at run time, give the derive macro a
+`[Span]` field. Every element becomes a label:
 
 ```haskell
-data MultipleShadows = MultipleShadows
-  { msSource :: NamedSource
-  , msName   :: Text
-  , msPrior  :: [Span]
+data MultipleDefinitions = MultipleDefinitions
+  { mdSource :: NamedSource
+  , mdName   :: Text
+  , mdLatest :: Span
+  , mdPrior  :: [Span]
   }
-  deriving stock (Show)
 
-$(deriveDiagnostic defaultSpec
-    { specMessage =
-        Just [| \e -> "`" <> pretty (msName e) <> "` shadowed multiple times" |]
-    , specSourceField =
-        Just 'msSource
-    , specSecondaryLabelCollectionFields =
-        [('msPrior, "shadowed here")]
-    } ''MultipleShadows)
+deriveDiagnostic defaultSpec
+  { specMessage =
+      Just [| \e -> "`" <> pretty (mdName e) <> "` is defined more than once" |]
+  , specSourceField                    = Just 'mdSource
+  , specLabelFields                    = [('mdLatest, "latest definition")]
+  , specSecondaryLabelCollectionFields = [('mdPrior, "also defined here")]
+  }
+  ''MultipleDefinitions
 ```
 
-Each element of `msPrior` becomes a separate secondary label with the same
-caption.
+An empty list contributes no labels. To give each element its own text, use
+`specSecondaryLabelCollectionFieldsWith` (or the primary variant) with an
+`e -> [(Span, Text)]` expression.
 
-Fixed label fields and collection fields can be combined. Fixed fields are
-emitted first, followed by collection elements in list order.
+Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
-## 9. Related diagnostics and cause chains
+## 9. Causes and related diagnostics
 
-Tadka distinguishes two relationships:
-
-- **`related`** — a list of diagnostics that provide additional context.
-- **`diagnosticCause`** — a single underlying diagnostic forming a cause chain.
-
-Both use `SomeDiagnostic`, allowing diagnostics of different concrete types to
-be connected.
-
-For example:
+A *cause* is the one underlying diagnostic that led to this one. *Related*
+diagnostics are further context. Both are `SomeDiagnostic`, so they can be of
+different types. Here an import error has a cause with a source of its own:
 
 ```haskell
 data ImportError = ImportError
@@ -422,48 +365,66 @@ data ImportError = ImportError
   , ieAt     :: Span
   , ieCause  :: Maybe SomeDiagnostic
   }
-  deriving stock (Show)
 
-$(deriveDiagnostic defaultSpec
-    { specMessage =
-        Just [| \_ -> "failed to resolve import" |]
-    , specSourceField =
-        Just 'ieSource
-    , specLabelFields =
-        [('ieAt, "this import")]
-    , specCause =
-        Just 'ieCause
-    } ''ImportError)
+deriveDiagnostic defaultSpec
+  { specMessage     = Just [| \_ -> "failed to resolve import" |]
+  , specSourceField = Just 'ieSource
+  , specLabelFields = [('ieAt, "this import")]
+  , specCause       = Just 'ieCause
+  }
+  ''ImportError
 ```
 
-An underlying diagnostic can then be attached with:
-
 ```haskell
-SomeDiagnostic underlyingParseError
+-- | The underlying problem, which has a source of its own.
+data ConfigError = ConfigError
+  { ceSource :: NamedSource
+  , ceAt     :: Span
+  }
+
+deriveDiagnostic defaultSpec
+  { specMessage     = Just [| \_ -> "unknown module path" |]
+  , specSourceField = Just 'ceSource
+  , specLabelFields = [('ceAt, "no such module")]
+  }
+  ''ConfigError
 ```
 
-Related and cause chains can contain recursive references. Tadka protects
-rendering in two ways:
-
-1. `DiagnosticId` can identify diagnostics and stop a chain when an already
-   rendered identity is encountered.
-2. `withRelatedDepthLimit` provides a depth bound even when diagnostics do not
-   have an identity.
-
-This prevents recursive diagnostic structures from causing unbounded rendering.
-
-## 10. Diagnostics that span more than one file
-
-When a diagnostic refers to several source files, use `mkContextMulti`.
-
-**Complete program — replace `Main.hs` with this:**
+A diagnostic can also collect others as related diagnostics:
 
 ```haskell
-{-# LANGUAGE OverloadedStrings #-}
+newtype BuildFailed = BuildFailed [SomeDiagnostic]
 
-import Data.List.NonEmpty (NonEmpty (..))
-import Tadka
+instance Diagnostic BuildFailed where
+  message (BuildFailed ds) =
+    pretty ("build failed with " <> T.pack (show (length ds)) <> " errors")
+  related (BuildFailed ds) = ds
+```
 
+By default a cause is one line, its code and message. To show each cause of the
+reported diagnostic as a full nested report, with its own snippet, help, and
+related diagnostics:
+
+```haskell
+-- | The default shows each cause as one line; 'CauseFull' nests its report.
+fullCauses :: Config
+fullCauses = withCauseDetail CauseFull plainConfig
+```
+
+Rendering is bounded however the diagnostics are connected. Cause chains and
+related trees stop at the related-depth limit, and a `diagnosticId` stops a
+diagnostic from being rendered twice. Only the reported diagnostic's own causes
+are expanded by `CauseFull`; the causes of related diagnostics are always
+one-line summaries, so even a cyclic structure produces a small report.
+
+Run `cabal run test:docs -- --print` to see the report each of these examples produces.
+
+## 10. Several files
+
+One diagnostic can label spans in more than one source. `mkContextMulti` takes
+a non-empty list of sources, each with its labels:
+
+```haskell
 data CrossFileError = CrossFileError
   { cfeSourceA :: NamedSource
   , cfeSourceB :: NamedSource
@@ -479,51 +440,32 @@ instance Diagnostic CrossFileError where
       mkContextMulti
         ( (cfeSourceA e, Labeled (cfeAtA e) Primary (Just "defined here") :| [])
           :| [ (cfeSourceB e, Labeled (cfeAtB e) Primary (Just "used here") :| []) ]
-        )
-
-main :: IO ()
-main =
-  case ( mkNamedSource "A.hs" "value = 42\n"
-       , mkNamedSource "B.hs" "use = value + 1\n"
-       , mkSpan 0 5
-       , mkSpan 6 5
-       ) of
-    (Right sourceA, Right sourceB, Right atA, Right atB) ->
-      reportDiagnostic defaultConfig
-        (CrossFileError sourceA sourceB atA atB)
-    _ ->
-      putStrLn "could not construct the example diagnostic"
 ```
 
-Run it:
+`mkContextMulti` returns an `Either`; the example falls back to no context if a
+span does not fit. `mkContextMultiDegrading` always returns a `Context` and marks
+a misfit label stale. The derive macros and `genericContext` work with a single
+source.
 
-```sh
-cabal run
-```
+Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
-There is also `mkContextMultiDegrading`. This version can preserve the rest of a
-diagnostic when an individual span has become stale because its source text has
-changed. For a single source, the corresponding function is
-`mkContextDegrading`.
+## 11. A family of errors from one sum type
 
-The `deriveDiagnostic` helper is designed around a single source field. For a
-multi-file diagnostic, a normal `Diagnostic` instance gives you direct control
-over the complete context.
-
-## 11. Deriving a whole family of errors at once
-
-A compiler or parser often has one sum type containing many error constructors.
-`deriveDiagnosticSum` can derive the diagnostics for the whole family in one
-splice.
-
-**Complete program — replace `Main.hs` with this:**
+`deriveDiagnosticSum` derives the instance for a sum type, giving each
+constructor its own `DiagnosticSpec`. Constructor-specific record fields trigger
+GHC's partial-field warnings, so a module doing this switches them off:
 
 ```haskell
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell   #-}
+{-# OPTIONS_GHC -Wno-partial-fields #-}
+#if __GLASGOW_HASKELL__ >= 910
+{-# OPTIONS_GHC -Wno-incomplete-record-selectors #-}
+#endif
+```
 
-import Tadka
-
+```haskell
 data CompileError
   = ParseFailure
       { crSource :: NamedSource
@@ -535,85 +477,173 @@ data CompileError
       , tmExpected :: String
       }
 
-$(deriveDiagnosticSum
-    [ ( 'ParseFailure
-      , defaultSpec
-          { specMessage     = Just [| \_ -> "unexpected token" |]
-          , specSourceField = Just 'crSource
-          , specLabelFields = [('crAt, "here")]
-          }
-      )
-    , ( 'TypeMismatch
-      , defaultSpec
-          { specSeverity    = SevWarning
-          , specMessage     = Just [| \_ -> "type mismatch" |]
-          , specSourceField = Just 'tmSource
-          , specLabelFields = [('tmAt, "here")]
-          }
-      )
-    ]
-    ''CompileError)
-
-main :: IO ()
-main =
-  case (mkNamedSource "Main.hs" "x = foo\n", mkSpan 4 3) of
-    (Right source, Right at) ->
-      reportDiagnostic defaultConfig (ParseFailure source at)
-    _ ->
-      putStrLn "could not construct the example diagnostic"
+deriveDiagnosticSum
+  [ ( 'ParseFailure
+    , defaultSpec
+        { specMessage     = Just [| \_ -> "unexpected token" |]
+        , specSourceField = Just 'crSource
+        , specLabelFields = [('crAt, "here")]
+        }
+    )
+  , ( 'TypeMismatch
+    , defaultSpec
+        { specSeverity    = SevWarning
+        , specMessage     = Just [| \e -> "type mismatch, expected " <> pretty (tmExpected e) |]
+        , specSourceField = Just 'tmSource
+        , specLabelFields = [('tmAt, "here")]
+        }
+    )
+  ]
+  ''CompileError
 ```
 
-Run it:
+Run `cabal run test:docs -- --print` to see the report each of these examples produces.
 
-```sh
-cabal run
+## 12. Your own source representation
+
+Spans point into a `SourceCode`. The built-in `NamedSource` is a strict `Text`
+and a name, but any type with an instance works, for example an editor buffer
+that is never one big `Text`. The instance answers five questions: the name, the
+length in code points, the number of lines, a window of lines, and the line and
+column of an offset:
+
+```haskell
+-- | A named buffer: its lines, without line terminators.
+data Buffer = Buffer
+  { bufName  :: Text
+  , bufLines :: [Text]
+  }
+
+-- A source always has at least one line, even when empty.
+linesOf :: Buffer -> [Text]
+linesOf b = if null (bufLines b) then [T.empty] else bufLines b
+
+instance SourceCode Buffer where
+  scName = bufName
+
+  -- Length in code points, counting one character per line break.
+  scLength b = T.length (T.intercalate "\n" (linesOf b))
+
+  scLineCount b = length (linesOf b)
+
+  -- A window of lines, 1-based and inclusive, clipped to what exists.
+  scLines b (lo, hi) =
+    [ (n, l) | (n, l) <- zip [1 ..] (linesOf b), n >= max 1 lo, n <= hi ]
+
+  -- Line and column (both 1-based) of a code-point offset.
+  scLocate b offset = go 1 offset (linesOf b)
+    where
+      go n o (l : rest)
+        | o <= T.length l || null rest = LineCol n (o + 1)
+        | otherwise                    = go (n + 1) (o - T.length l - 1) rest
+      go n o []                        = LineCol n (o + 1)
 ```
 
-`deriveDiagnosticSum` checks that the constructors and specifications agree.
-Adding a constructor without a corresponding specification therefore becomes a
-compile-time error.
+Pass the value wherever a source is expected:
 
-Sum types with constructor-specific record fields can also trigger GHC's
-record-selector warnings under `-Wall -Werror`. Those warnings concern the
-application's sum type, not Tadka's diagnostic machinery.
+```haskell
+-- | A diagnostic whose source is the buffer.
+data NameClash = NameClash Buffer Span
 
-## 12. Hooking up a parser or compiler
-
-If your application already uses one of the supported parser/compiler APIs,
-the corresponding interop sub-library can convert its source locations into
-Tadka spans.
-
-In Cabal:
-
-```cabal
-build-depends:
-    base,
-    tadka,
-    tadka:interop-megaparsec
+instance Diagnostic NameClash where
+  message _ = pretty ("name defined twice" :: Text)
+  context (NameClash buf at) =
+    mkContextDegrading buf (Labeled at Primary (Just (pretty ("second definition" :: Text))) :| [])
 ```
 
-The available integrations are:
-
+<!-- output: custom-source -->
 ```text
-Tadka.Interop.Megaparsec
-Tadka.Interop.Attoparsec
-Tadka.Interop.GHC
+error: name defined twice
+  ┌─ scratch buffer:3:1
+  │
+3 │ x = 3
+  │ ^ second definition
 ```
 
-They provide adapters from the corresponding source-location/error
-representations into Tadka's `Span` model.
+A diagnostic stores its sources as `SomeSource`, which lets one context mix
+source types; wrap a value with `someSource`. The derive macros accept a field
+of type `NamedSource` or `SomeSource`.
 
-The core `tadka` package itself does not depend on these parser/compiler
-packages. Use only the integration packages your application needs.
+## 13. Diagnostics without a type of their own
 
-## 13. Where to look next
+For an error that does not deserve its own type, build a diagnostic from text.
+`adHoc` makes one from `Text`, `fromError` from any `Exception`, `wrapErr` makes
+one the cause of another, and `withCode`, `withSeverity`, `withHelp`, `withUrl`,
+and `withSourceCode` fill in the rest:
 
-- The [README](README.md) is the shorter introduction and quick-start guide.
-- The `Tadka` module is the primary application-facing API.
-- The Haddock documentation generated from `src/Tadka.hs` is the detailed API
-  reference.
-- The test suite contains additional examples of labels, collections,
-  related/cause chains, multi-source diagnostics, rendering, and parser/compiler
-  integration.
+```haskell
+loadFailed :: AdHocDiagnostic
+loadFailed =
+    withHelp "check that the file exists and is readable"
+  . withCode (either (error . show) id (mkDiagnosticCode "demo::E0004"))
+  $ wrapErr "could not load the configuration" (fromError (userError "config.toml: not found"))
+```
 
-When in doubt, prefer the public `Tadka` API over `Tadka.Internal.*`.
+Any diagnostic can also be thrown and caught like an exception:
+
+```haskell
+-- | Throw it, catch it as a 'SomeDiagnostic', and print the report.
+report :: IO ()
+report =
+  catchDiagnostic (throwDiagnostic loadFailed)
+    (\(SomeDiagnostic e) -> reportDiagnostic defaultConfig e)
+```
+
+<!-- output: ad-hoc -->
+```text
+error[demo::E0004]: could not load the configuration
+  = help: check that the file exists and is readable
+  = caused by: user error (config.toml: not found)
+```
+
+`installPanicHook` makes an uncaught diagnostic exception print as a full report
+on standard error. Note that `intoDiagnostic` uses `show`, so a `String` comes
+out quoted; prefer `fromError` for exceptions and `adHoc` for text.
+
+## 14. Syntax highlighting
+
+Tadka has no highlighter of its own. A `Highlighter` takes a source's name and
+its lines and returns the same lines with colour added:
+
+```haskell
+-- | Receives the source's name and all its lines; returns one coloured line
+-- per input line, or 'Nothing' to leave the source plain.
+keywords :: Highlighter
+keywords = Highlighter
+  { highlighterName = "keywords"
+  , runHighlighter  = \_ ls -> Just (map (T.replace "let" "\ESC[36mlet\ESC[0m") ls)
+  }
+
+-- | Colour must be on for a highlighter to run.
+coloured :: Config
+coloured = withHighlighter keywords (withColorMode ColorAlways (withUnicodeMode UnicodeAlways defaultConfig))
+```
+
+A highlighter can only add colour. Tadka keeps a line only if removing its
+colour codes gives back exactly the original line, so a highlighter cannot change
+text, move a caret, or emit another terminal escape sequence. Highlighting does
+nothing under `ColorNever`.
+
+For real syntax highlighting use the separate `tadka-highlight` package:
+
+```haskell
+config :: Config
+config = withHighlighter (skylightingAuto pygments) defaultConfig
+```
+
+**`tadka-highlight` is GPL-2.0-only**, because the `skylighting` library it
+depends on is GPL-2. `tadka` is MIT and has no dependency on either.
+
+## 15. Parsers and compilers
+
+The optional sub-libraries convert a parser's position into a `Span`:
+`Tadka.Interop.Megaparsec.spanFromError`, `Tadka.Interop.Attoparsec.spanFromConsumed`
+(with `consumedOffset`), and `Tadka.Interop.GHC.spanFromSrcSpan` (with
+`offsetFromLineCol`). They do not build a diagnostic; you write the instance and
+use the span in its `context`.
+
+## Where next
+
+The [README](README.md) has the overview and the configuration table. The
+`test/docs/Examples` directory holds the complete source of every example in
+this tutorial.

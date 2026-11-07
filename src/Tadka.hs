@@ -4,11 +4,10 @@
 -- vocabulary defined across @Tadka.Internal.*@. Anything reachable only via
 -- @Tadka.Internal.*@ carries no compatibility guarantee.
 --
--- Phases 1–2 populate the validated primitive types, resolution-indexed spans,
--- and 'Context' construction. The @Diagnostic@ class, renderers, and the derive
--- macro, and interop adapters complete the surface. The public API matches
---  @Offset@\/@Length@ and other representation details live under
--- "Tadka.Internal" with no compatibility guarantee.
+-- The module exports the validated primitive types, resolution-indexed spans,
+-- 'Context' construction, the 'Diagnostic' class and its renderers, the
+-- derive macros, ad hoc diagnostics, and the exception bridge. Representation
+-- details such as @Offset@\/@Length@ live under "Tadka.Internal".
 module Tadka
   ( -- * Named source
     NamedSource
@@ -88,13 +87,12 @@ module Tadka
   , mkContext
   , mkContextDegrading
   , ContextError (..)
-    -- ** Multi-source context (Phase 12)
+    -- ** Multi-source context
     --
-    -- A 'Context' can hold labels resolved against more than one 'NamedSource'.
-    -- Single-source construction above is unchanged; these are the entry
-    -- points for a diagnostic whose labels span several files. The derive
-    -- macro and 'genericContext' remain single-source only in v1 — these are
-    -- hand-written-instance functions.
+    -- A 'Context' can hold labels resolved against more than one source. These
+    -- are the entry points for a diagnostic whose labels span several files.
+    -- The derive macros and 'genericContext' take a single source, so a
+    -- multi-source diagnostic is written as a hand-written instance.
   , mkContextMulti
   , mkContextMultiDegrading
     -- * Rendering configuration
