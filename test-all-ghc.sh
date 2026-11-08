@@ -29,6 +29,9 @@ for version in "${VERSIONS[@]}"; do
   cabal test golden --test-show-details=direct
   cabal test props --test-show-details=direct
   cabal test interop --test-show-details=direct
+  cabal test docs --test-show-details=direct
+  cabal test hello --test-show-details=direct
+  cabal test smoke --test-show-details=direct
 
   sh tools/check-generated.sh
   sh tools/check-compile-fail.sh
