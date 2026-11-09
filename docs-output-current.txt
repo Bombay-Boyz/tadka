@@ -1,0 +1,160 @@
+Build profile: -w ghc-9.14.1 -O1
+In order, the following will be built (use -v for more details):
+ - tadka-2.1.0.0 (test:docs) (additional components to build)
+Preprocessing test suite 'docs' for tadka-2.1.0.0...
+Building test suite 'docs' for tadka-2.1.0.0...
+===== quickstart =====
+error[demo::E0001]: unbound variable quantity
+  ┌─ demo.hs:1:21
+  │
+1 │ let total = price * quantity
+  │                     ^^^^^^^^ not in scope
+  │
+  = help: check the spelling, or import the name
+
+===== derive =====
+error[demo::E0002]: expected Int, found Text
+  ┌─ demo.hs:1:17
+  │
+1 │ total = count + "1"
+  │                 ^^^ type mismatch here
+  │
+  = help: convert one side explicitly
+
+error[demo::E0003]: expected 2 arguments, got 3
+  ┌─ demo.hs:1:1
+  │
+1 │ area 3 4 5
+  │ ^^^^^^^^^^ called here
+  │
+  = help: remove the extra arguments
+
+===== labels-derive =====
+error: `x` shadows an earlier binding
+  ┌─ demo.hs:2:5
+  │
+1 │ let x = 1
+  │     - previous binding was here
+2 │ let x = 2
+  │     ^ new binding here
+
+===== labels-collection =====
+error: `x` is defined more than once
+  ┌─ demo.hs:3:1
+  │
+1 │ x = 1
+  │ - also defined here
+2 │ x = 2
+  │ ~ also defined here
+3 │ x = 3
+  │ ^ latest definition
+
+===== labels-manual =====
+error: conflicting definitions
+  ┌─ demo.hs:2:1
+  │
+1 │ x = 1
+  │ - first defined here
+2 │ x = 2
+  │ ^ redefined here
+
+===== cause-summary =====
+error: failed to resolve import
+  ┌─ Main.hs:1:8
+  │
+1 │ import Data.Mapp
+  │        ^^^^^^^^^ this import
+  │
+  = caused by: unknown module path
+
+===== cause-full =====
+error: failed to resolve import
+  ┌─ Main.hs:1:8
+  │
+1 │ import Data.Mapp
+  │        ^^^^^^^^^ this import
+  │
+  = caused by: unknown module path
+    ┌─ modules.cfg:1:11
+    │
+  1 │ unknown = Data.Mapp
+    │           ^^^^^^^^^ no such module
+
+===== related =====
+error: build failed with 2 errors
+  = related: failed to resolve import
+    ┌─ Main.hs:1:8
+    │
+  1 │ import Data.Mapp
+    │        ^^^^^^^^^ this import
+    │
+    = caused by: unknown module path
+  = related: disk full
+
+===== multi-file =====
+error: these declarations disagree
+  ┌─ A.hs:1:1
+  │
+1 │ value = 42
+  │ ^^^^^ defined here
+  │
+  ┌─ B.hs:1:7
+  │
+1 │ use = value + 1
+  │       ^^^^^ used here
+
+===== family-error =====
+error: unexpected token
+  ┌─ Main.hs:1:5
+  │
+1 │ x = foo
+  │     ^^^ here
+
+===== family-warning =====
+warning: type mismatch, expected Int
+  ┌─ Main.hs:1:5
+  │
+1 │ y = 'c'
+  │     ^^^ here
+
+===== custom-source =====
+error: name defined twice
+  ┌─ scratch buffer:3:1
+  │
+3 │ x = 3
+  │ ^ second definition
+
+===== ad-hoc =====
+error[demo::E0004]: could not load the configuration
+  = help: check that the file exists and is readable
+  = caused by: user error (config.toml: not found)
+
+===== highlight =====
+[0;91;1merror[demo::E0001]:[0m unbound variable quantity
+  ┌─ demo.hs:1:21
+  │
+1 │ [36mlet[0m total = price * quantity
+  │                     [0;91;1m^^^^^^^^ not in scope[0m
+  │
+  = help: check the spelling, or import the name
+
+===== format-narratable =====
+Error, code demo::E0001: unbound variable quantity.
+Location: demo.hs, line 1, column 21.
+Source line 1: "let total = price * quantity".
+The problem is at columns 21 through 28, labeled: not in scope.
+Help: check the spelling, or import the name
+
+===== format-json =====
+{"causes":[],"code":"demo::E0001","cycleOmitted":false,"help":"check the spelling, or import the name","labels":[{"column":21,"file":"demo.hs","length":8,"line":1,"primary":true,"stale":false,"text":"not in scope"}],"message":"unbound variable quantity","related":[],"schemaVersion":1,"severity":"error","truncated":false,"url":null}
+
+===== configure =====
+error[demo::E0001]: unbound variable quantity
+  ┌─ demo.hs:1:21
+  │
+1 │ let total = price * quantity
+  │                     ^^^^^^^^ not in scope
+2 │ 
+  │
+  = help: check the spelling, or import the name
+

@@ -1,0 +1,53 @@
+verify-docs report, 2026-11-09T03:56:00Z
+ghc:   9.12.4
+cabal: 3.16.1.0
+git:   11b461e (uncommitted changes)
+
+=== build everything, warnings as errors
+$ cabal build all --flags=werror
+RESULT: PASS
+
+=== docs suite (examples + documentation check)
+$ cabal test docs --test-show-details=direct
+RESULT: PASS
+ok   quickstart
+ok   derive
+ok   labels-derive
+ok   labels-collection
+ok   labels-manual
+ok   cause-summary
+ok   cause-full
+ok   related
+ok   multi-file
+ok   family-error
+ok   family-warning
+ok   custom-source
+ok   ad-hoc
+ok   highlight
+ok   format-narratable
+ok   format-json
+ok   configure
+ok   documentation (3 files)
+
+=== hello suite (README quick-start program)
+$ cabal test hello --test-show-details=direct
+RESULT: PASS
+
+=== smoke suite (tadka-highlight README example)
+$ cabal test smoke --test-show-details=direct
+RESULT: PASS
+
+=== example output written to docs-output-current.txt
+
+=== fresh project in /tmp/tmp.F0YlPtUuEn
+
+=== fresh project: examples build with only the documented dependencies
+$ bash -c cd '/tmp/tmp.F0YlPtUuEn' && cabal build fresh-docs:lib:fresh-docs
+RESULT: PASS
+
+=== fresh project: the README program builds and runs
+$ bash -c cd '/tmp/tmp.F0YlPtUuEn' && cabal run hello
+RESULT: PASS
+
+VERIFICATION: ALL STEPS PASSED
+report written to verify-report-9.12.4.txt
