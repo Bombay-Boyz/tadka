@@ -79,6 +79,10 @@ and makes a few breaking API changes. The breaking changes are listed first.
 - **Builds on GHC 9.6 and 9.8** failed because of an unimported `foldl'`.
 - **Pathological structures** in which `CauseFull` and related diagnostics refer
   to each other can no longer produce an unbounded report.
+- **A blank line after a trailing newline.** With `withContextLines`, a source that
+  ends in a newline showed an extra empty "line" after the last real one. It is
+  now shown only when a label points at it, as for an "unexpected end of input"
+  label at the very end of the text.
 
 ### Housekeeping
 

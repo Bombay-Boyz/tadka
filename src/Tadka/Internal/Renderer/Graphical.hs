@@ -99,6 +99,22 @@ graphicalOptions cfg = GraphicalOptions
   , goHighlighter   = configHighlighter cfg
   }
 
+-- | How many lines of a source are worth showing as context.
+--
+-- A source that ends with a newline has a final, empty "line" that no editor
+-- numbers, and showing it as context (when context lines are on) displays a
+-- blank line that is not there. It is shown only when a label actually points
+-- at it, as for an "unexpected end of input" label at the very end of the text.
+displayableLineCount :: SourceCode s => s -> [Int] -> Int
+displayableLineCount src anchors
+  | total > 1 && lastIsEmpty && all (< total) anchors = total - 1
+  | otherwise                                          = total
+  where
+    total       = scLineCount src
+    lastIsEmpty = case scLines src (total, total) of
+      [(_, t)] -> T.null t
+      _        -> False
+
 -- | Box-drawing glyph set, selected by 'UnicodeMode'.
 data Glyphs = Glyphs
   { gRail   :: Text   -- ^ vertical rail
@@ -402,7 +418,7 @@ groupSnippetLines glyphs sev cmode hl palette tabW ctxLines gw (SourceGroup src 
                     ++ [ endLineOf rs | (_, rs, _, _, _) <- oks, isMulti rs ]) of
       []       -> []
       (s : ss) -> concatMap (renderEntry win) plan
-        where plan   = planLines ctxLines (scLineCount src) (s : ss)
+        where plan   = planLines ctxLines (displayableLineCount src (s : ss)) (s : ss)
               showns = [ l | ShowLine l <- plan ]
               win    = case showns of
                          (w : ws) -> scLines src (foldr min w ws, foldr max w ws)

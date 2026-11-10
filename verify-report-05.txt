@@ -1,0 +1,79 @@
+verify-docs report, 2026-11-10T05:01:32Z
+ghc:   9.14.1
+cabal: 3.16.1.0
+git:   180b99e (uncommitted changes)
+
+=== build everything, warnings as errors
+$ cabal build all --flags=werror
+RESULT: FAIL
+Resolving dependencies...
+Build profile: -w ghc-9.14.1 -O1
+In order, the following will be built (use -v for more details):
+ - tadka-2.1.0.0 (test:golden) (additional components to build)
+ - tadka-2.1.0.0 (test:props) (file test/props/Main.hs changed)
+Preprocessing test suite 'golden' for tadka-2.1.0.0...
+Building test suite 'golden' for tadka-2.1.0.0...
+Preprocessing test suite 'props' for tadka-2.1.0.0...
+Building test suite 'props' for tadka-2.1.0.0...
+[11 of 36] Compiling PanicHook        ( test/props/PanicHook.hs, dist-newstyle/build/x86_64-linux/ghc-9.14.1/tadka-2.1.0.0/t/props/build/props/props-tmp/PanicHook.o )
+test/props/PanicHook.hs:15:69: error: [GHC-61689]
+    Module ‘System.IO’ does not export ‘hDuplicate’.
+   |
+15 | import           System.IO              (IOMode (ReadMode), hClose, hDuplicate, hDuplicateTo,
+   |                                                                     ^^^^^^^^^^
+
+test/props/PanicHook.hs:15:81: error: [GHC-61689]
+    Module ‘System.IO’ does not export ‘hDuplicateTo’.
+   |
+15 | import           System.IO              (IOMode (ReadMode), hClose, hDuplicate, hDuplicateTo,
+   |                                                                                 ^^^^^^^^^^^^
+
+Error: [Cabal-7125]
+Failed to build test:props from tadka-2.1.0.0.
+
+
+=== docs suite (examples + documentation check)
+$ cabal test docs --test-show-details=direct
+RESULT: PASS
+ok   quickstart
+ok   derive
+ok   labels-derive
+ok   labels-collection
+ok   labels-manual
+ok   cause-summary
+ok   cause-full
+ok   related
+ok   multi-file
+ok   family-error
+ok   family-warning
+ok   custom-source
+ok   ad-hoc
+ok   highlight
+ok   format-narratable
+ok   format-json
+ok   configure
+ok   documentation (3 files)
+
+=== hello suite (README quick-start program)
+$ cabal test hello --test-show-details=direct
+RESULT: PASS
+
+=== smoke suite (tadka-highlight README example)
+$ cabal test smoke --test-show-details=direct
+RESULT: PASS
+
+=== example output written to docs-output-current.txt
+
+=== fresh project in /tmp/tmp.tPdVAeInEb
+
+=== fresh project: examples build with only the documented dependencies
+$ bash -c cd '/tmp/tmp.tPdVAeInEb' && cabal build fresh-docs:lib:fresh-docs
+RESULT: PASS
+
+=== fresh project: the README program builds and runs
+$ bash -c cd '/tmp/tmp.tPdVAeInEb' && cabal run hello
+RESULT: PASS
+
+VERIFICATION: FAILED STEPS: | build everything, warnings as errors
+(fresh project kept at /tmp/tmp.tPdVAeInEb for inspection)
+report written to verify-report-05.txt
